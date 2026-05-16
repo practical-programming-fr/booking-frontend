@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180" width="180" height="180">
+  <rect width="180" height="180" fill="#F4F2EC"/>
+  <text x="22" y="122" font-family="Georgia, 'Iowan Old Style', serif" font-size="108" fill="#111111" letter-spacing="-3">FL</text>
+  <circle cx="150" cy="108" r="13" fill="#D64B1F"/>
+  <text x="22" y="160" font-family="ui-monospace, 'SF Mono', Menlo, monospace" font-size="11" fill="#4A4A48" letter-spacing="1.5">FLYLO · AIRLINES</text>
+</svg>

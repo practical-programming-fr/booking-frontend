@@ -1,0 +1,324 @@
+@import "tailwindcss";
+
+/* ==========================================================================
+   FLYLO — design tokens
+   Dieter Rams / Vignelli / Vitsœ discipline. Paper, ink, one accent.
+   ========================================================================== */
+
+:root {
+  --paper: #f4f2ec;
+  --paper-2: #edeae1;
+  --ink: #111111;
+  --ink-soft: #4a4a48;
+  --ink-mute: #8c8a82;
+  --rule: #d9d6ce;
+  --accent: #d64b1f;
+  --signal: #1c4e2f;
+
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --gutter: 1.5rem;
+  --measure: 62ch;
+}
+
+@theme inline {
+  --color-paper: var(--paper);
+  --color-paper-2: var(--paper-2);
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-ink-mute: var(--ink-mute);
+  --color-rule: var(--rule);
+  --color-accent: var(--accent);
+  --color-signal: var(--signal);
+
+  --font-display: var(--font-display), "Iowan Old Style", Georgia, serif;
+  --font-sans: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-mono), ui-monospace, "SFMono-Regular", Menlo,
+    monospace;
+}
+
+/* ==========================================================================
+   Base
+   ========================================================================== */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  background: var(--paper);
+  color: var(--ink);
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-feature-settings: "ss01", "cv11", "liga", "calt";
+  font-size: 15px;
+  line-height: 1.5;
+  letter-spacing: -0.005em;
+}
+
+::selection {
+  background: var(--accent);
+  color: var(--paper);
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* Utility helpers that aren't worth Tailwind variants */
+.font-display {
+  font-family: var(--font-display);
+  letter-spacing: -0.02em;
+}
+
+.font-mono {
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum", "zero";
+  letter-spacing: 0;
+}
+
+.rule {
+  display: block;
+  width: 100%;
+  height: 1px;
+  background: var(--rule);
+}
+
+.rule-v {
+  display: block;
+  width: 1px;
+  background: var(--rule);
+}
+
+/* Eyebrow / section label: 01 / HORIZONS  */
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  font-feature-settings: "tnum";
+}
+
+/* ==========================================================================
+   Grid container
+   ========================================================================== */
+
+.container-rams {
+  width: 100%;
+  max-width: 1440px;
+  margin-inline: auto;
+  padding-inline: 1.25rem;
+}
+@media (min-width: 640px) {
+  .container-rams {
+    padding-inline: 2rem;
+  }
+}
+@media (min-width: 1024px) {
+  .container-rams {
+    padding-inline: 3rem;
+  }
+}
+@media (min-width: 1280px) {
+  .container-rams {
+    padding-inline: 4rem;
+  }
+}
+
+.grid-12 {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  column-gap: var(--gutter);
+}
+
+/* ==========================================================================
+   Motion
+   ========================================================================== */
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes draw-x {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@keyframes marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+@keyframes blink {
+  0%, 60% { opacity: 1; }
+  61%, 100% { opacity: 0; }
+}
+
+.rise {
+  animation: rise 800ms var(--ease) both;
+}
+
+.rule-draw {
+  transform-origin: left;
+  animation: draw-x 900ms var(--ease) both;
+}
+
+.marquee-track {
+  display: inline-flex;
+  white-space: nowrap;
+  animation: marquee 60s linear infinite;
+  will-change: transform;
+}
+
+.marquee-wrap:hover .marquee-track {
+  animation-play-state: paused;
+}
+
+.dot-live {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  animation: blink 1.8s var(--ease) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rise,
+  .rule-draw,
+  .marquee-track,
+  .dot-live {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+}
+
+/* ==========================================================================
+   Buttons / inputs
+   ========================================================================== */
+
+.btn-ink {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1.25rem;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--paper);
+  background: var(--ink);
+  border: 1px solid var(--ink);
+  overflow: hidden;
+  cursor: pointer;
+  transition: color 400ms var(--ease);
+}
+.btn-ink:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.btn-ink::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--accent);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 400ms var(--ease);
+  z-index: 0;
+}
+.btn-ink > * {
+  position: relative;
+  z-index: 1;
+}
+.btn-ink:hover::after,
+.btn-ink:focus-visible::after {
+  transform: scaleX(1);
+}
+
+.btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1.25rem;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid var(--rule);
+  cursor: pointer;
+  transition: border-color 300ms var(--ease), color 300ms var(--ease);
+}
+.btn-ghost:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.btn-ghost:hover,
+.btn-ghost:focus-visible {
+  border-color: var(--ink);
+}
+
+/* Hairline underlined link */
+.link-rule {
+  position: relative;
+  display: inline-block;
+  padding-bottom: 2px;
+}
+.link-rule::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  background: currentColor;
+  transform: scaleX(0);
+  transform-origin: right;
+  transition: transform 400ms var(--ease);
+}
+.link-rule:hover::after,
+.link-rule:focus-visible::after {
+  transform: scaleX(1);
+  transform-origin: left;
+}
+
+/* ==========================================================================
+   Focus outlines — honest, not pretty
+   ========================================================================== */
+
+:where(a, button, input, select, textarea):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
