@@ -27,7 +27,7 @@ export function Hero({ airports }: Props) {
 
       <p className="mt-7 max-w-[58ch] text-[15px] leading-[1.6] text-[color:var(--ink-soft)] md:text-[17px]">
         Search the live network, hold a seat for ten minutes, and confirm
-        without a sign-up wall. Atlas Suite to Linen, one fare published, no
+        without a sign-up wall. Atlas Suite to Linen — one fare published, no
         add-ons at the gate.
       </p>
 

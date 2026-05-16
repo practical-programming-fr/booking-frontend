@@ -27,7 +27,8 @@ export function Footer() {
                 href={site.marketingUrl}
                 className="btn-ghost"
               >
-                <span>FlyLo.air</span>
+                <span>flylo-air.com</span>
+                <span aria-hidden>→</span>
               </a>
             </div>
             <p className="mt-8 max-w-[40ch] font-mono text-[11px] uppercase tracking-[0.14em] text-[color:var(--ink-mute)]">

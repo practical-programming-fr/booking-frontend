@@ -9,7 +9,7 @@ export const site = {
   icao: "FLY",
   hqCity: "San Francisco",
   year: new Date().getUTCFullYear(),
-  marketingUrl: process.env.NEXT_PUBLIC_MARKETING_URL ?? "https://www.flylo.air",
+  marketingUrl: process.env.NEXT_PUBLIC_MARKETING_URL ?? "https://www.flylo-air.com",
 };
 
 export const nav: { label: string; href: string }[] = [
@@ -30,24 +30,24 @@ export const footerNav: { heading: string; links: { label: string; href: string 
   {
     heading: "Cabin",
     links: [
-      { label: "Atlas Suite", href: `${process.env.NEXT_PUBLIC_MARKETING_URL ?? "https://www.flylo.air"}/cabin#atlas` },
-      { label: "Prospect", href: `${process.env.NEXT_PUBLIC_MARKETING_URL ?? "https://www.flylo.air"}/cabin#prospect` },
-      { label: "Linen", href: `${process.env.NEXT_PUBLIC_MARKETING_URL ?? "https://www.flylo.air"}/cabin#linen` },
+      { label: "Atlas Suite", href: `${process.env.NEXT_PUBLIC_MARKETING_URL ?? "https://www.flylo-air.com"}/cabin#atlas` },
+      { label: "Prospect", href: `${process.env.NEXT_PUBLIC_MARKETING_URL ?? "https://www.flylo-air.com"}/cabin#prospect` },
+      { label: "Linen", href: `${process.env.NEXT_PUBLIC_MARKETING_URL ?? "https://www.flylo-air.com"}/cabin#linen` },
     ],
   },
   {
     heading: "Company",
     links: [
-      { label: "About FlyLo", href: process.env.NEXT_PUBLIC_MARKETING_URL ?? "https://www.flylo.air" },
-      { label: "Network", href: `${process.env.NEXT_PUBLIC_MARKETING_URL ?? "https://www.flylo.air"}/network` },
-      { label: "Journal", href: `${process.env.NEXT_PUBLIC_MARKETING_URL ?? "https://www.flylo.air"}/journal` },
+      { label: "About FlyLo", href: process.env.NEXT_PUBLIC_MARKETING_URL ?? "https://www.flylo-air.com" },
+      { label: "Network", href: `${process.env.NEXT_PUBLIC_MARKETING_URL ?? "https://www.flylo-air.com"}/network` },
+      { label: "Journal", href: `${process.env.NEXT_PUBLIC_MARKETING_URL ?? "https://www.flylo-air.com"}/journal` },
     ],
   },
   {
     heading: "Contact",
     links: [
       { label: "+1 (415) 580-0707", href: "tel:+14155800707" },
-      { label: "contact@flylo.air", href: "mailto:contact@flylo.air" },
+      { label: "contact@flylo-air.com", href: "mailto:contact@flylo-air.com" },
       { label: "Guest Care · 06:00–22:00 PT", href: "#" },
     ],
   },

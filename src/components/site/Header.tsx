@@ -29,7 +29,7 @@ export function Header() {
             className="link-rule hidden font-mono text-[11px] uppercase tracking-[0.14em] text-[color:var(--ink-soft)] hover:text-[color:var(--ink)] sm:inline-flex"
           >
             <span aria-hidden className="mr-1">←</span>
-            <span>flylo.air</span>
+            <span>flylo-air.com</span>
           </a>
           <Link href="/trips" className="btn-ghost hidden sm:inline-flex">
             <span>Find a trip</span>

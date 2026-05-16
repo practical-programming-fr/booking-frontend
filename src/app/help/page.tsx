@@ -29,7 +29,7 @@ export default function HelpPage() {
               <a href="tel:+14155800707" className="link-rule">+1 (415) 580-0707</a>
             </li>
             <li>
-              <a href="mailto:contact@flylo.air" className="link-rule">contact@flylo.air</a>
+              <a href="mailto:contact@flylo-air.com" className="link-rule">contact@flylo-air.com</a>
             </li>
           </ul>
         </div>
@@ -42,7 +42,7 @@ export default function HelpPage() {
           </p>
           <div className="mt-6">
             <a href={site.marketingUrl} className="btn-ghost">
-              <span>flylo.air</span>
+              <span>flylo-air.com</span>
               <span aria-hidden>→</span>
             </a>
           </div>

@@ -23,7 +23,7 @@ Verbatim port of `flylo-air/web`:
 - Typography (Instrument Serif display, Geist body, Geist Mono data)
 - UI primitives (`Rule`, `SectionLabel`, `DataRow`, `eyebrow`, `btn-ink`, `btn-ghost`)
 - `Header`, `Footer`, `Marquee` adapted for the app context (slimmer
-  header with a "Back to flylo.air" link)
+  header with a "Back to flylo-air.com" link)
 
 ## Environment
 
@@ -31,7 +31,7 @@ Verbatim port of `flylo-air/web`:
 |---|---|
 | `BOOKING_API_URL` | server-side fetches to the backend |
 | `NEXT_PUBLIC_BOOKING_API_URL` | client-side fetches |
-| `NEXT_PUBLIC_MARKETING_URL` | back-link in the header (default `https://www.flylo.air`) |
+| `NEXT_PUBLIC_MARKETING_URL` | back-link in the header (default `https://www.flylo-air.com`) |
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase (reserved for future realtime) |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase (reserved for future realtime) |
 

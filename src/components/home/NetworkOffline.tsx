@@ -28,7 +28,7 @@ export function NetworkOffline({ error }: Props) {
         </p>
         <div className="mt-8 flex gap-3">
           <a href={site.marketingUrl} className="btn-ghost">
-            <span>flylo.air</span>
+            <span>flylo-air.com</span>
           </a>
         </div>
       </div>

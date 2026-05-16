@@ -1,7 +1,7 @@
 # FlyLo Booking · Frontend
 
 The real booking product for FlyLo Airlines. Built in the same visual
-language as the marketing site at [flylo.air](https://www.flylo.air),
+language as the marketing site at [flylo-air.com](https://www.flylo-air.com),
 served separately so it can ship at its own cadence and talk to the
 booking-backend API.
 
@@ -47,7 +47,7 @@ backend. If the backend isn't reachable, the page renders a graceful
 |---|---|
 | `BOOKING_API_URL` | server-side fetches in Server Components |
 | `NEXT_PUBLIC_BOOKING_API_URL` | client-side fetches |
-| `NEXT_PUBLIC_MARKETING_URL` | "Back to flylo.air" link (default `https://www.flylo.air`) |
+| `NEXT_PUBLIC_MARKETING_URL` | "Back to flylo-air.com" link (default `https://www.flylo-air.com`) |
 | `NEXT_PUBLIC_SUPABASE_URL` | reserved for future realtime |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | reserved for future realtime |
 
@@ -60,7 +60,7 @@ design tokens, fonts, and a handful of UI primitives:
 - `src/lib/fonts.ts` — same Geist + Instrument Serif setup
 - `src/components/ui/{Rule,SectionLabel,DataRow}.tsx` — verbatim ports
 - `src/components/site/{Header,Footer,Logo,Marquee}.tsx` — booking-app
-  adaptations (slimmer nav, "Booking" wordmark, back-link to flylo.air)
+  adaptations (slimmer nav, "Booking" wordmark, back-link to flylo-air.com)
 
 If we end up wanting a single source of truth later, the cleanest move
 is to extract those primitives into a tiny `@flylo/ui` workspace
