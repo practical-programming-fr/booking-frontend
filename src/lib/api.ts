@@ -3,8 +3,10 @@
 //
 // Every request carries the browser's session id (x-booking-session) so the
 // backend can scope draft bookings to this device without authentication.
+// On the server the session id comes from the `flylo_booking_session`
+// cookie set by the client-side helper.
 
-import { getSessionIdForServer } from "./session";
+import { getSessionIdForServer, getOrCreateSessionId } from "./session";
 
 export type Airport = {
   iata: string;
@@ -124,11 +126,101 @@ export type SeatMap = {
   }>;
 };
 
+// --- Booking view (mirror of backend src/domain/types.ts) -----------------
+
+export type BookingContact = {
+  name?: string;
+  email?: string;
+  phone?: string;
+};
+
+export type BookingPassenger = {
+  passengerNo: number;
+  givenName: string;
+  familyName: string;
+  loyaltyNo: string | null;
+  notes: string | null;
+  seatId: string | null;
+  mealId: string | null;
+};
+
+export type BookingSegment = {
+  segmentNo: number;
+  flightId: string;
+  cabin: "A" | "P" | "L";
+  flightNo: string;
+  departAt: string;
+  arriveAt: string;
+  durationMin: number;
+  aircraft: string;
+  from: { iata: string; city: string; country: string; tz: string };
+  to: { iata: string; city: string; country: string; tz: string };
+};
+
+export type BookingPayment = {
+  id: string;
+  provider: "mock" | "stripe_test";
+  status: "pending" | "succeeded" | "failed" | "refunded";
+  amountEur: number;
+  cardholder: string | null;
+  cardLast4: string | null;
+  cardBrand: string | null;
+  createdAt: string;
+  completedAt: string | null;
+};
+
+export type BookingTotals = {
+  baseEur: number;
+  seatsEur: number;
+  mealsEur: number;
+  taxesEur: number;
+  surfaceEur: number;
+  totalEur: number;
+};
+
+export type Booking = {
+  pnr: string;
+  status: "draft" | "awaiting_payment" | "confirmed" | "cancelled";
+  contact: BookingContact;
+  pax: number;
+  currency: "EUR";
+  totals: BookingTotals;
+  holdExpiresAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  confirmedAt: string | null;
+  cancelledAt: string | null;
+  segments: BookingSegment[];
+  passengers: BookingPassenger[];
+  payments: BookingPayment[];
+};
+
+export type Trip = {
+  pnr: string;
+  status: Booking["status"];
+  pax: number;
+  totalEur: number;
+  contact: BookingContact;
+  createdAt: string;
+  confirmedAt: string | null;
+  cancelledAt: string | null;
+  segment: {
+    flightNo: string;
+    cabin: "A" | "P" | "L";
+    departAt: string;
+    arriveAt: string;
+    durationMin: number;
+    from: { iata: string; city: string };
+    to: { iata: string; city: string };
+  } | null;
+};
+
 class ApiError extends Error {
   constructor(
     public readonly status: number,
     message: string,
     public readonly url: string,
+    public readonly code?: string,
   ) {
     super(`${status} ${message} (${url})`);
     this.name = "ApiError";
@@ -157,6 +249,17 @@ function getBaseUrl(): string {
   );
 }
 
+async function resolveSessionId(
+  override: string | null | undefined,
+): Promise<string> {
+  if (override === null) return "";
+  if (override) return override;
+  if (typeof window === "undefined") {
+    return await getSessionIdForServer();
+  }
+  return getOrCreateSessionId();
+}
+
 async function request<T>(path: string, init: ApiRequestInit = {}): Promise<T> {
   const baseUrl = getBaseUrl();
   const url = `${baseUrl}${path}`;
@@ -166,35 +269,30 @@ async function request<T>(path: string, init: ApiRequestInit = {}): Promise<T> {
     headers.set("Content-Type", "application/json");
   }
 
-  if (init.sessionId !== null) {
-    const sessionId =
-      init.sessionId ??
-      (typeof window === "undefined"
-        ? getSessionIdForServer()
-        : (await import("./session")).getOrCreateSessionId());
-    if (sessionId) {
-      headers.set("x-booking-session", sessionId);
-    }
+  const sessionId = await resolveSessionId(init.sessionId);
+  if (sessionId) {
+    headers.set("x-booking-session", sessionId);
   }
 
   const res = await fetch(url, {
     ...init,
     headers,
-    // Server-side fetches default to no caching so we never serve stale
-    // search results. Callers can opt in to `next: { revalidate: ... }`
-    // for read-mostly resources like /airports.
     cache: init.cache ?? "no-store",
   });
 
   if (!res.ok) {
     let message = res.statusText;
+    let code: string | undefined;
     try {
-      const body = (await res.json()) as { error?: { message?: string } };
+      const body = (await res.json()) as {
+        error?: { message?: string; code?: string };
+      };
       message = body.error?.message ?? message;
+      code = body.error?.code;
     } catch {
       // ignore JSON parse failure
     }
-    throw new ApiError(res.status, message, url);
+    throw new ApiError(res.status, message, url, code);
   }
 
   return (await res.json()) as T;
@@ -260,6 +358,127 @@ export const bookingApi = {
       `/v1/flights/${encodeURIComponent(id)}/seat-map?cabin=${cabin}`,
       init,
     ),
+
+  // --- Booking writes --------------------------------------------------
+
+  createBooking: async (
+    input: {
+      flightId: string;
+      cabin: "A" | "P" | "L";
+      pax: number;
+      contact?: BookingContact;
+    },
+    init?: ApiRequestInit,
+  ): Promise<{ booking: Booking }> =>
+    request("/v1/bookings", {
+      ...init,
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
+  getBooking: async (
+    pnr: string,
+    opts: { email?: string } = {},
+    init?: ApiRequestInit,
+  ): Promise<{ booking: Booking }> => {
+    const search = new URLSearchParams();
+    if (opts.email) search.set("email", opts.email);
+    const qs = search.toString();
+    return request(
+      `/v1/bookings/${encodeURIComponent(pnr)}${qs ? `?${qs}` : ""}`,
+      init,
+    );
+  },
+
+  updateContact: async (
+    pnr: string,
+    contact: BookingContact,
+    init?: ApiRequestInit,
+  ): Promise<{ booking: Booking }> =>
+    request(`/v1/bookings/${encodeURIComponent(pnr)}/contact`, {
+      ...init,
+      method: "POST",
+      body: JSON.stringify({ contact }),
+    }),
+
+  upsertPassengers: async (
+    pnr: string,
+    passengers: Array<{
+      passengerNo: number;
+      givenName: string;
+      familyName: string;
+      loyaltyNo?: string | null;
+      notes?: string | null;
+    }>,
+    init?: ApiRequestInit,
+  ): Promise<{ booking: Booking }> =>
+    request(`/v1/bookings/${encodeURIComponent(pnr)}/passengers`, {
+      ...init,
+      method: "POST",
+      body: JSON.stringify({ passengers }),
+    }),
+
+  assignSeats: async (
+    pnr: string,
+    assignments: Array<{ passengerNo: number; seatId: string | null }>,
+    init?: ApiRequestInit,
+  ): Promise<{ booking: Booking }> =>
+    request(`/v1/bookings/${encodeURIComponent(pnr)}/seats`, {
+      ...init,
+      method: "POST",
+      body: JSON.stringify({ assignments }),
+    }),
+
+  assignMeals: async (
+    pnr: string,
+    assignments: Array<{ passengerNo: number; mealId: string }>,
+    init?: ApiRequestInit,
+  ): Promise<{ booking: Booking }> =>
+    request(`/v1/bookings/${encodeURIComponent(pnr)}/meals`, {
+      ...init,
+      method: "POST",
+      body: JSON.stringify({ assignments }),
+    }),
+
+  createPaymentIntent: async (
+    pnr: string,
+    init?: ApiRequestInit,
+  ): Promise<{
+    intent: { paymentId: string; clientSecret: string; amountEur: number };
+    booking: Booking;
+  }> =>
+    request(`/v1/bookings/${encodeURIComponent(pnr)}/payment-intent`, {
+      ...init,
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
+
+  confirmPayment: async (
+    pnr: string,
+    body: {
+      paymentId: string;
+      card: { cardholder: string; last4: string; brand?: string };
+    },
+    init?: ApiRequestInit,
+  ): Promise<{ booking: Booking }> =>
+    request(`/v1/bookings/${encodeURIComponent(pnr)}/confirm`, {
+      ...init,
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  cancelBooking: async (
+    pnr: string,
+    init?: ApiRequestInit,
+  ): Promise<{ booking: Booking }> =>
+    request(`/v1/bookings/${encodeURIComponent(pnr)}/cancel`, {
+      ...init,
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
+
+  myTrips: async (init?: ApiRequestInit): Promise<{ trips: Trip[] }> =>
+    request("/v1/me/trips", init),
 };
 
 export { ApiError };

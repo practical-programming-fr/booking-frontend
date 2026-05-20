@@ -1,13 +1,12 @@
 // Browser session identity. We don't have auth in v1, so each browser keeps
-// a UUID in localStorage and we send it as `x-booking-session` on every API
-// request. The backend uses it to scope draft bookings to this device.
-//
-// On the server we can't access localStorage. Server Components either pass
-// `null` (for public, non-personalised reads) or read from a cookie if we
-// ever start mirroring the session id there. For now the API client treats
-// a missing session as "no header" and the backend allows that for reads.
+// a UUID in localStorage AND mirrors it into a cookie so Server Components
+// can authenticate to the booking-backend. We send the same UUID as
+// `x-booking-session` on every API request; the backend uses it to scope
+// draft bookings to this device.
 
 const STORAGE_KEY = "flylo:booking:session";
+const COOKIE_KEY = "flylo_booking_session";
+const COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 365;
 
 function generateUuid(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -34,21 +33,49 @@ function generateUuid(): string {
   );
 }
 
+function setSessionCookie(id: string): void {
+  if (typeof document === "undefined") return;
+  const isSecure = typeof window !== "undefined" && window.location.protocol === "https:";
+  document.cookie =
+    `${COOKIE_KEY}=${id}; path=/; max-age=${COOKIE_MAX_AGE_SECONDS}; samesite=lax` +
+    (isSecure ? "; secure" : "");
+}
+
+function readSessionCookie(): string | null {
+  if (typeof document === "undefined") return null;
+  for (const pair of document.cookie.split(";")) {
+    const [name, ...rest] = pair.trim().split("=");
+    if (name === COOKIE_KEY) {
+      return rest.join("=") || null;
+    }
+  }
+  return null;
+}
+
 export function getOrCreateSessionId(): string {
   if (typeof window === "undefined") {
     return "";
   }
-  let id = window.localStorage.getItem(STORAGE_KEY);
+  let id =
+    window.localStorage.getItem(STORAGE_KEY) ?? readSessionCookie() ?? null;
   if (!id) {
     id = generateUuid();
-    window.localStorage.setItem(STORAGE_KEY, id);
   }
+  window.localStorage.setItem(STORAGE_KEY, id);
+  setSessionCookie(id);
   return id;
 }
 
-// Server-side helper: read the session id from a cookie if we ever mirror it.
-// Today this returns an empty string and the API client omits the header,
-// which is fine for public reads.
-export function getSessionIdForServer(): string {
-  return "";
+/** Server-side: read the session UUID from the request cookie if present. */
+export async function getSessionIdForServer(): Promise<string> {
+  if (typeof window !== "undefined") return "";
+  try {
+    const { cookies } = await import("next/headers");
+    const store = await cookies();
+    return store.get(COOKIE_KEY)?.value ?? "";
+  } catch {
+    return "";
+  }
 }
+
+export const SESSION_COOKIE_NAME = COOKIE_KEY;
