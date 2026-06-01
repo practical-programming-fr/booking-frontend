@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { SectionLabel } from "@/components/ui/SectionLabel";
 import { bookingApi, ApiError, type Booking, type SeatMap } from "@/lib/api";
@@ -101,7 +101,6 @@ export function CheckoutFlow({ initialBooking, seatMap }: Props) {
   const [booking, setBooking] = useState(initialBooking);
   const [step, setStep] = useState<StepId>("itinerary");
   const [error, setError] = useState<string | null>(null);
-  const [, startTransition] = useTransition();
   const [isBusy, setIsBusy] = useState(false);
   const [holdRemaining, setHoldRemaining] = useState<number | null>(null);
   const [paymentId, setPaymentId] = useState<string | null>(null);
@@ -212,6 +211,20 @@ export function CheckoutFlow({ initialBooking, seatMap }: Props) {
     }
   };
 
+  const updatePassengerSelection = (
+    passengerNo: number,
+    patch: Partial<Pick<Booking["passengers"][number], "seatId" | "mealId">>,
+  ) => {
+    setBooking((current) => ({
+      ...current,
+      passengers: current.passengers.map((passenger) =>
+        passenger.passengerNo === passengerNo
+          ? { ...passenger, ...patch }
+          : passenger,
+      ),
+    }));
+  };
+
   const submitTravellers = async () => {
     if (!contactComplete) {
       setError("Add a lead contact name + email before continuing.");
@@ -317,33 +330,51 @@ export function CheckoutFlow({ initialBooking, seatMap }: Props) {
   const assignSeat = (seatId: string | null) => {
     const target = booking.passengers[activePassengerIdx];
     if (!target) return;
-    startTransition(async () => {
-      try {
-        await wrapMutation(() =>
-          bookingApi.assignSeats(booking.pnr, [
-            { passengerNo: target.passengerNo, seatId },
-          ]),
-        );
-      } catch {
-        // error already surfaced
-      }
-    });
+    const previousBooking = booking;
+
+    setError(null);
+    setIsBusy(true);
+    updatePassengerSelection(target.passengerNo, { seatId });
+
+    void bookingApi
+      .assignSeats(booking.pnr, [{ passengerNo: target.passengerNo, seatId }])
+      .then(({ booking: next }) => {
+        setBooking(next);
+      })
+      .catch((err) => {
+        const message =
+          err instanceof ApiError ? err.message : err instanceof Error ? err.message : String(err);
+        setBooking(previousBooking);
+        setError(message);
+      })
+      .finally(() => {
+        setIsBusy(false);
+      });
   };
 
   const assignMeal = (mealId: string) => {
     const target = booking.passengers[activePassengerIdx];
     if (!target) return;
-    startTransition(async () => {
-      try {
-        await wrapMutation(() =>
-          bookingApi.assignMeals(booking.pnr, [
-            { passengerNo: target.passengerNo, mealId },
-          ]),
-        );
-      } catch {
-        // error already surfaced
-      }
-    });
+    const previousBooking = booking;
+
+    setError(null);
+    setIsBusy(true);
+    updatePassengerSelection(target.passengerNo, { mealId });
+
+    void bookingApi
+      .assignMeals(booking.pnr, [{ passengerNo: target.passengerNo, mealId }])
+      .then(({ booking: next }) => {
+        setBooking(next);
+      })
+      .catch((err) => {
+        const message =
+          err instanceof ApiError ? err.message : err instanceof Error ? err.message : String(err);
+        setBooking(previousBooking);
+        setError(message);
+      })
+      .finally(() => {
+        setIsBusy(false);
+      });
   };
 
   return (
