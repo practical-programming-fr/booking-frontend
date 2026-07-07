@@ -31,15 +31,27 @@ The home page hits `GET /v1/airports` and `GET /v1/routes` on the
 backend. If the backend isn't reachable, the page renders a graceful
 "network offline" panel.
 
-## Routes (v0.1)
+## Routes
 
-| Path | Purpose |
-|---|---|
-| `/` | Search hero + reassurance grid + trending destinations per hub |
-| `/search` | Server-rendered live results with cabin price chips |
-| `/flights/[id]` | Placeholder — full detail + seat map lands next |
-| `/trips` | Placeholder — trip lookup lands with the write-side PR |
-| `/help` | Static contact + about |
+| Path | Purpose | Status |
+|---|---|---|
+| `/` | Search hero + reassurance grid + trending destinations per hub | Implemented |
+| `/search` | Server-rendered live results with cabin price chips | Implemented |
+| `/flights/[id]` | Flight detail with cabin chooser + seat-map preview | Implemented |
+| `/book/[pnr]` | 5-step checkout: itinerary, passengers, seats + meals, payment, review | Implemented |
+| `/book/[pnr]/confirmation` | Boarding-pass-style confirmation | Implemented |
+| `/trips` | List trips for this browser session + PNR/email lookup | Implemented |
+| `/trips/[pnr]` | Trip detail + online check-in entry point | Implemented |
+| `/help` | Static contact + about | Implemented |
+| `/ops` | Password-gated incident console driving the "3am outage" demo | Implemented |
+
+`/ops` (plus its orchestrator at `/api/ops/tick`) monitors the backend,
+flips the seeded outage flag, launches the summarizer/fixer Cursor cloud
+agents, and posts to Slack. Runbook: `flylo-air/docs` →
+`demo-3am-outage.md`.
+
+`SPEC.md` and the files under `src/app/` are the source of truth for the
+route inventory. Update them together when routes change.
 
 ## Environment
 
@@ -50,6 +62,7 @@ backend. If the backend isn't reachable, the page renders a graceful
 | `NEXT_PUBLIC_MARKETING_URL` | "Back to flylo-air.com" link (default `https://www.flylo-air.com`) |
 | `NEXT_PUBLIC_SUPABASE_URL` | reserved for future realtime |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | reserved for future realtime |
+| `OPS_*`, `SLACK_WEBHOOK_URL`, `CURSOR_API_KEY`, `GITHUB_TOKEN`, `CRON_SECRET` | ops incident console; all optional locally (see `.env.example` for each var's role) |
 
 ## Design system inheritance
 
