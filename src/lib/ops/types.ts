@@ -5,6 +5,15 @@
 // without importing the server-only config module).
 export const OUTAGE_FLAG_KEY = "fare_adjustment_v2";
 
+// The benign, self-healing scenario flag key (kept here so callers can read it
+// without importing the server-only config module).
+export const SPIKE_FLAG_KEY = "traffic_spike_sim";
+
+// Incident kinds. "outage" is the real bug that gets a fix PR; "spike" is the
+// benign transient (degraded performance) that an agent investigates and
+// concludes is a non-issue. The backend check constraint allows both values.
+export type IncidentKind = "outage" | "spike";
+
 export type OpsFlag = {
   key: string;
   enabled: boolean;
@@ -32,6 +41,8 @@ export type IncidentEvent = {
 export type OpsIncident = {
   id: string;
   status: string;
+  // Older rows may predate the column; treat a missing kind as "outage".
+  kind?: IncidentKind;
   title: string;
   startedAt: string;
   resolvedAt: string | null;
@@ -58,10 +69,17 @@ export type ProbeResult = {
 export type OpsSnapshot = {
   now: string;
   outageEnabled: boolean;
+  // Whether the benign transient (degraded performance) scenario is active.
+  spikeEnabled: boolean;
   flags: OpsFlag[];
   probes: ProbeResult[];
   errors: OpsError[];
   errorRate5xx: number;
+  // The most relevant incident to surface (open outage, else open transient,
+  // else the most recent). Kept for backward compatibility.
   incident: OpsIncident | null;
+  // The open transient incident, if one is active, surfaced separately so both
+  // scenarios can be represented at once.
+  spikeIncident: OpsIncident | null;
   agentsAvailable: boolean;
 };

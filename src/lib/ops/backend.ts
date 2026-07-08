@@ -1,7 +1,12 @@
 import "server-only";
 
 import { getBackendBaseUrl, getOpsSharedSecret } from "./config";
-import type { OpsError, OpsFlag, OpsIncident, IncidentEvent } from "./types";
+import type { OpsError, OpsFlag, OpsIncident, IncidentEvent, IncidentKind } from "./types";
+
+// A missing kind on a row predates the kind column; treat it as an outage.
+export function incidentKind(incident: OpsIncident): IncidentKind {
+  return incident.kind ?? "outage";
+}
 
 // Thin server-side client for booking-backend's /v1/_ops API. Every call
 // carries the shared secret as a bearer token when one is configured.
@@ -83,8 +88,23 @@ export async function fetchIncidents(limit = 10): Promise<OpsIncident[]> {
   return data.incidents;
 }
 
+// Find the open incident of a specific kind. The backend's /incidents/open
+// endpoint returns a single open incident regardless of kind, which is unsafe
+// when an outage and a transient are both active, so we scan recent incidents
+// and filter by kind + open status. This keeps the two scenarios independent.
+export async function fetchOpenIncidentByKind(
+  kind: IncidentKind,
+  scan = 20,
+): Promise<OpsIncident | null> {
+  const list = await fetchIncidents(scan);
+  return (
+    list.find((i) => i.status === "open" && incidentKind(i) === kind) ?? null
+  );
+}
+
 export async function createIncident(input: {
   title?: string;
+  kind?: IncidentKind;
   event: IncidentEvent;
 }): Promise<OpsIncident> {
   const data = await opsFetch<{ incident: OpsIncident }>("/v1/_ops/incidents", {

@@ -7,6 +7,12 @@ import "server-only";
 
 export const FARE_ADJUSTMENT_FLAG = "fare_adjustment_v2";
 
+// The benign, self-healing scenario flag. When enabled it drives a
+// "degraded performance" (transient) incident that an agent investigates and
+// concludes is a non-issue. It never affects probes or 5xx, so the booking
+// site stays up the whole time.
+export const SPIKE_FLAG = "traffic_spike_sim";
+
 export function getBackendBaseUrl(): string {
   return (
     process.env.BOOKING_API_URL ??
@@ -75,6 +81,16 @@ export function getOutageTtlMinutes(): number {
   const raw = process.env.OUTAGE_TTL_MINUTES;
   const n = raw ? Number.parseInt(raw, 10) : NaN;
   return Number.isFinite(n) && n >= 0 ? n : 20;
+}
+
+// How long the benign "degraded performance" scenario runs before it
+// self-resolves. The transient incident needs the investigation note posted
+// and this TTL elapsed (or the flag flipped off) before it recovers, so a
+// forgotten spike demo always heals on its own. Read in seconds.
+export function getSpikeTtlSeconds(): number {
+  const raw = process.env.SPIKE_TTL_SECONDS;
+  const n = raw ? Number.parseInt(raw, 10) : NaN;
+  return Number.isFinite(n) && n >= 0 ? n : 90;
 }
 
 // Optional request header carrying the identity of whoever flips the toggle

@@ -79,6 +79,39 @@ Find and fix the root-cause bug so the pricing endpoints return 200 again. Requi
 - Add or update a focused unit test that would catch this regression if you can do so quickly.
 - Open a pull request with a clear title and a short description of the root cause and the fix.`;
 
+const INVESTIGATOR_PROMPT = (errors: OpsError[]) => `You are the on-call engineer for FlyLo, a premium airline. Monitoring flagged elevated latency (slower-than-usual responses) on the production booking API (repo ${getFixRepo()}). The site is UP and serving requests; this is a performance blip, not an outage. Customers are not being turned away.
+
+Recent signals captured from production:
+
+${formatErrorSamples(errors)}
+
+Investigate briefly and decide whether this is a real problem that needs a code change, or a transient blip (for example a short traffic burst or a slow downstream call) that clears on its own. Do NOT open a pull request and do NOT change any code. Your final message must be a short assessment, formatted as:
+
+*What we saw:* one sentence on the symptom.
+*Assessment:* one or two sentences on the likely cause and whether it is transient.
+*Recommendation:* one sentence. In the common transient case this is "no action needed; monitoring".
+
+Keep it under 90 words and written for a non-engineer audience.`;
+
+// Launch a single investigator for the benign transient scenario. It reuses the
+// same cloud-agent launch mechanism as the summarizer (autoCreatePR: false), so
+// it can never open a PR. It only produces a short assessment.
+export async function launchInvestigator(errors: OpsError[]): Promise<string> {
+  const { Agent } = await loadSdk();
+  const model = await resolveModel();
+  const agent = await Agent.create({
+    apiKey: getCursorApiKey(),
+    name: `FlyLo latency investigator · ${new Date().toISOString()}`,
+    model,
+    cloud: {
+      repos: [{ url: `https://github.com/${getFixRepo()}`, startingRef: FIX_STARTING_REF }],
+      autoCreatePR: false,
+    },
+  });
+  await agent.send(INVESTIGATOR_PROMPT(errors), { model });
+  return agent.agentId;
+}
+
 export async function launchSummarizer(errors: OpsError[]): Promise<string> {
   const { Agent } = await loadSdk();
   const model = await resolveModel();
