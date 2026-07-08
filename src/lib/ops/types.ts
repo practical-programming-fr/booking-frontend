@@ -1,7 +1,7 @@
-// Shared ops-console types. Pure types only (no server-only imports) so both
-// the API route handlers and the client dashboard component can use them.
+// Shared ops types. Pure types only (no server-only imports) so the API route
+// handlers and the orchestrator can share them.
 
-// The single shared outage toggle key (kept here so the client can read it
+// The single shared outage toggle key (kept here so callers can read it
 // without importing the server-only config module).
 export const OUTAGE_FLAG_KEY = "fare_adjustment_v2";
 

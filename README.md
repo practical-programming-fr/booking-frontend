@@ -43,11 +43,14 @@ backend. If the backend isn't reachable, the page renders a graceful
 | `/trips` | List trips for this browser session + PNR/email lookup | Implemented |
 | `/trips/[pnr]` | Trip detail + online check-in entry point | Implemented |
 | `/help` | Static contact + about | Implemented |
-| `/ops` | Password-gated incident console driving the "3am outage" demo | Implemented |
 
-`/ops` (plus its orchestrator at `/api/ops/tick`) monitors the backend,
-flips the seeded outage flag, launches the summarizer/fixer Cursor cloud
-agents, and posts to Slack. Runbook: `flylo-air/docs` →
+The customer-facing `/ops` console page has been retired from this booking
+site. The incident trigger UI now lives in a separate internal, employee-only
+admin app. The orchestrator stays here and runs headless: `/api/ops/tick`
+(invoked by Vercel Cron, see `vercel.json`) monitors the backend, launches the
+summarizer/fixer Cursor cloud agents, posts to Slack (#incidents), and opens
+the fix PR. The internal admin app flips the seeded outage flag by calling the
+booking-backend `/v1/_ops` endpoints directly. Runbook: `flylo-air/docs`,
 `demo-3am-outage.md`.
 
 `SPEC.md` and the files under `src/app/` are the source of truth for the
@@ -62,7 +65,7 @@ route inventory. Update them together when routes change.
 | `NEXT_PUBLIC_MARKETING_URL` | "Back to flylo-air.com" link (default `https://www.flylo-air.com`) |
 | `NEXT_PUBLIC_SUPABASE_URL` | reserved for future realtime |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | reserved for future realtime |
-| `OPS_*`, `SLACK_WEBHOOK_URL`, `CURSOR_API_KEY`, `GITHUB_TOKEN`, `CRON_SECRET` | ops incident console; all optional locally (see `.env.example` for each var's role) |
+| `OPS_*`, `SLACK_WEBHOOK_URL`, `CURSOR_API_KEY`, `GITHUB_TOKEN`, `CRON_SECRET` | incident orchestrator (tick, agents, Slack, fix PR); all optional locally (see `.env.example` for each var's role) |
 
 ## Design system inheritance
 

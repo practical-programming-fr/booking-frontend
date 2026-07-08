@@ -7,9 +7,9 @@ import { FARE_ADJUSTMENT_FLAG, getActorHeader } from "@/lib/ops/config";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-// Best-effort identity for the transparent "flipped by <who>" banner. Reads a
-// configured SSO-forwarded header (e.g. an email) when the console is hosted
-// behind SSO; falls back to a body-supplied actor, else null.
+// Best-effort identity for the transparent "flipped by <who>" attribution.
+// Reads a configured SSO-forwarded header (e.g. an email) when these routes are
+// hosted behind SSO; falls back to a body-supplied actor, else null.
 function resolveActor(req: Request, bodyActor?: string | null): string | null {
   const header = getActorHeader();
   if (header) {

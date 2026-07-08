@@ -73,8 +73,8 @@ export async function buildSnapshot(): Promise<OpsSnapshot> {
 export type TickOptions = { force?: boolean };
 
 // One step of the incident state machine. Idempotent and safe to call
-// frequently (dashboard poll ~10s and Vercel cron ~60s both hit it). Returns
-// the fresh snapshot so callers can render without a second round trip.
+// frequently (Vercel cron ~60s hits it, and callers may invoke it directly).
+// Returns the fresh snapshot so callers can render without a second round trip.
 export async function runTick(options: TickOptions = {}): Promise<OpsSnapshot> {
   let flags = await fetchFlags();
 

@@ -1,6 +1,6 @@
 import "server-only";
 
-// Central config for the incident-response console. Everything is read from
+// Central config for the incident-response orchestrator. Everything is read from
 // the environment so the same code runs locally (open, no secrets) and on
 // Vercel (secrets set in the project). Sensible defaults keep local dev
 // zero-config.
@@ -78,13 +78,13 @@ export function getOutageTtlMinutes(): number {
 }
 
 // Optional request header carrying the identity of whoever flips the toggle
-// (e.g. an SSO-forwarded email when the console is hosted behind SSO). Used
-// only for the transparent "flipped by <who>" banner. Null when unset.
+// (e.g. an SSO-forwarded email when the ops routes are hosted behind SSO). Used
+// only for the transparent "flipped by <who>" attribution. Null when unset.
 export function getActorHeader(): string | undefined {
   return process.env.OPS_ACTOR_HEADER || undefined;
 }
 
-// Endpoints the console probes to build the status lights. `date` is filled in
+// Endpoints the orchestrator probes to build the status lights. `date` is filled in
 // at probe time with a near-future day so search always has candidate flights.
 export type ProbeTarget = { id: string; label: string; path: string };
 

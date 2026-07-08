@@ -4,7 +4,7 @@ import { getBackendBaseUrl, getProbeTargets } from "./config";
 import type { ProbeResult } from "./types";
 
 // Probe the key booking endpoints server-side and report per-endpoint health.
-// Drives the dashboard status lights and the orchestrator's detect/recover
+// Drives the snapshot status lights and the orchestrator's detect/recover
 // logic. Probes run in parallel with a short timeout so a hung backend does
 // not stall the tick.
 

@@ -4,9 +4,9 @@ import { cookies } from "next/headers";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { getCronSecret, getOpsDashboardPassword } from "./config";
 
-// Lightweight cookie gate for the /ops console. This is a demo gate, not
-// production auth: it keeps the incident console off the public surface. When
-// OPS_DASHBOARD_PASSWORD is unset (local dev) the console is open.
+// Lightweight cookie gate for the ops API routes (/api/ops/*). This is a demo
+// gate, not production auth: it keeps the incident controls off the public
+// surface. When OPS_DASHBOARD_PASSWORD is unset (local dev) they are open.
 
 const COOKIE_NAME = "flylo_ops";
 const MAX_AGE_SECONDS = 60 * 60 * 8; // 8 hours
@@ -49,9 +49,10 @@ export async function signOutOps(): Promise<void> {
   store.delete(COOKIE_NAME);
 }
 
-// The tick endpoint is callable by the signed-in dashboard (cookie) or by
-// Vercel Cron / automation (Authorization: Bearer <CRON_SECRET>). If neither a
-// dashboard password nor a cron secret is configured (local dev), it is open.
+// The tick endpoint is callable by a cookie-authenticated caller (the ops
+// password cookie) or by Vercel Cron / automation (Authorization: Bearer
+// <CRON_SECRET>). If neither an ops password nor a cron secret is configured
+// (local dev), it is open.
 export async function isTickAuthorized(req: Request): Promise<boolean> {
   if (await isOpsAuthed()) return true;
   const cronSecret = getCronSecret();
