@@ -1,7 +1,7 @@
 import Link from "next/link";
 import type { Metadata } from "next";
 import { SectionLabel } from "@/components/ui/SectionLabel";
-import { bookingApi, type SearchResponse } from "@/lib/api";
+import { bookingApi, ApiError, type SearchResponse } from "@/lib/api";
 import {
   formatClockInZone,
   formatDuration,
@@ -62,11 +62,16 @@ export default async function SearchPage({
 
   let data: SearchResponse | null = null;
   let error: string | null = null;
+  let outage = false;
 
   try {
     data = await bookingApi.searchFlights({ from, to, date, pax, cabin });
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);
+    // A 5xx from the booking API is a service outage (as opposed to the
+    // backend being unreachable in local dev). Show a production-style
+    // "temporarily unavailable" state rather than a developer hint.
+    outage = err instanceof ApiError ? err.status >= 500 : false;
   }
 
   const results = data?.results ?? [];
@@ -111,7 +116,28 @@ export default async function SearchPage({
         </Link>
       </div>
 
-      {error && (
+      {error && outage && (
+        <div className="mt-12 border border-[color:var(--rule)] bg-[color:var(--paper-2)]/40 px-6 py-10">
+          <p className="eyebrow" style={{ color: "var(--accent)" }}>
+            Booking temporarily unavailable
+          </p>
+          <h2 className="mt-3 font-display text-[32px] leading-[1.05]">
+            We are having trouble pricing flights right now.
+          </h2>
+          <p className="mt-3 max-w-[60ch] text-[14px] leading-[1.6] text-[color:var(--ink-soft)]">
+            Our team has been alerted and is already on it. Please try again in
+            a few minutes. Existing trips and check-in are unaffected.
+          </p>
+          <div className="mt-6">
+            <Link href="/trips" className="btn-ghost">
+              <span>View my trips</span>
+              <span aria-hidden>→</span>
+            </Link>
+          </div>
+        </div>
+      )}
+
+      {error && !outage && (
         <div className="mt-12 border border-[color:var(--rule)] bg-[color:var(--paper-2)]/40 px-6 py-8">
           <p className="eyebrow">Atlas · offline</p>
           <h2 className="mt-3 font-display text-[28px] leading-[1.05]">

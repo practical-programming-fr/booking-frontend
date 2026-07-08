@@ -1,0 +1,191 @@
+import "server-only";
+
+import type { ModelSelection, Run, SDKModel } from "@cursor/sdk";
+import { Octokit } from "@octokit/rest";
+import {
+  getCursorApiKey,
+  getFixRepo,
+  getFixRepoParts,
+  getGithubToken,
+  getOpsAgentModel,
+} from "./config";
+import type { OpsError } from "./types";
+
+type CursorSdk = typeof import("@cursor/sdk");
+
+const FIX_STARTING_REF = "main";
+
+export function agentsAvailable(): boolean {
+  return Boolean(getCursorApiKey());
+}
+
+async function loadSdk(): Promise<CursorSdk> {
+  return import("@cursor/sdk");
+}
+
+async function resolveModel(): Promise<ModelSelection> {
+  const { Cursor } = await loadSdk();
+  const models: SDKModel[] = await Cursor.models.list({ apiKey: getCursorApiKey() });
+  const preferredId = getOpsAgentModel();
+  const requested = preferredId ? models.find((m) => m.id === preferredId) : undefined;
+  const fallback =
+    models.find((m) => m.variants?.some((v) => v.isDefault)) ?? models[0];
+  const model = requested ?? fallback;
+  if (!model) {
+    throw new Error("No Cursor model available for this API key");
+  }
+  const variant = model.variants?.find((v) => v.isDefault) ?? model.variants?.[0];
+  return variant?.params?.length
+    ? { id: model.id, params: variant.params }
+    : { id: model.id };
+}
+
+function formatErrorSamples(errors: OpsError[], limit = 5): string {
+  const sample = errors.slice(0, limit);
+  if (sample.length === 0) return "(no error samples captured)";
+  return sample
+    .map((e) => {
+      const stackHead = e.stack
+        ? e.stack.split("\n").slice(0, 6).join("\n")
+        : "(no stack)";
+      return `- ${e.method} ${e.path} -> ${e.status}\n  ${e.message}\n${stackHead}`;
+    })
+    .join("\n\n");
+}
+
+const SUMMARIZER_PROMPT = (errors: OpsError[]) => `You are the on-call incident responder for FlyLo, a premium airline. The production booking API (repo ${getFixRepo()}) is returning HTTP 500 errors on its pricing endpoints right now. Customers cannot search flights or book.
+
+Here are real error samples captured from production in the last few minutes:
+
+${formatErrorSamples(errors)}
+
+Investigate the repository to understand the likely root cause, then write a concise, exec-readable incident summary. Do NOT open a pull request and do NOT change any code. Your final message must be the summary itself, formatted as:
+
+*Impact:* one sentence on customer-facing impact.
+*Likely cause:* one or two sentences, plain language, referencing the specific code path.
+*Next step:* one sentence on the fix in flight.
+
+Keep the whole summary under 120 words. Write for a non-engineer executive audience.`;
+
+const FIXER_PROMPT = (errors: OpsError[]) => `You are an on-call engineer for FlyLo. The production booking API (repo ${getFixRepo()}) is throwing HTTP 500 errors on its pricing endpoints (flight search, flight detail, and booking creation). Customers are affected right now.
+
+Real error samples from production:
+
+${formatErrorSamples(errors)}
+
+Find and fix the root-cause bug so the pricing endpoints return 200 again. Requirements:
+- Fix forward with the smallest correct change. Do not delete or disable the fuel surcharge feature, and do not turn off any feature flag or environment toggle. The surcharge must still be applied correctly once fixed.
+- Keep the change scoped to the pricing/fare code; do not refactor unrelated files.
+- Add or update a focused unit test that would catch this regression if you can do so quickly.
+- Open a pull request with a clear title and a short description of the root cause and the fix.`;
+
+export async function launchSummarizer(errors: OpsError[]): Promise<string> {
+  const { Agent } = await loadSdk();
+  const model = await resolveModel();
+  const agent = await Agent.create({
+    apiKey: getCursorApiKey(),
+    name: `FlyLo incident summarizer · ${new Date().toISOString()}`,
+    model,
+    cloud: {
+      repos: [{ url: `https://github.com/${getFixRepo()}`, startingRef: FIX_STARTING_REF }],
+      autoCreatePR: false,
+    },
+  });
+  await agent.send(SUMMARIZER_PROMPT(errors), { model });
+  return agent.agentId;
+}
+
+export async function launchFixer(errors: OpsError[]): Promise<string> {
+  const { Agent } = await loadSdk();
+  const model = await resolveModel();
+  const agent = await Agent.create({
+    apiKey: getCursorApiKey(),
+    name: `FlyLo incident fixer · ${new Date().toISOString()}`,
+    model,
+    cloud: {
+      repos: [{ url: `https://github.com/${getFixRepo()}`, startingRef: FIX_STARTING_REF }],
+      autoCreatePR: true,
+      skipReviewerRequest: true,
+    },
+  });
+  await agent.send(FIXER_PROMPT(errors), { model });
+  return agent.agentId;
+}
+
+async function getLatestRun(agentId: string): Promise<Run | null> {
+  const { Agent } = await loadSdk();
+  const result = await Agent.listRuns(agentId, {
+    runtime: "cloud",
+    apiKey: getCursorApiKey(),
+    limit: 1,
+  });
+  return result.items[0] ?? null;
+}
+
+export type AgentStatus = {
+  status: "running" | "finished" | "error" | "cancelled" | "unknown";
+  finalText: string | null;
+  prUrl: string | null;
+  prNumber: number | null;
+};
+
+function extractFinalText(run: Run): string | null {
+  const direct = (run as { result?: string | null }).result;
+  if (direct && direct.trim()) return direct.trim();
+  return null;
+}
+
+function extractPr(run: Run): { prUrl: string | null; prNumber: number | null } {
+  const branches = run.git?.branches ?? [];
+  for (const b of branches) {
+    if (b.prUrl) {
+      const match = /\/pull\/(\d+)/.exec(b.prUrl);
+      return { prUrl: b.prUrl, prNumber: match ? Number(match[1]) : null };
+    }
+  }
+  return { prUrl: null, prNumber: null };
+}
+
+export async function getAgentStatus(agentId: string): Promise<AgentStatus> {
+  const run = await getLatestRun(agentId);
+  if (!run) {
+    return { status: "unknown", finalText: null, prUrl: null, prNumber: null };
+  }
+  const { prUrl, prNumber } = extractPr(run);
+  return {
+    status: (run.status as AgentStatus["status"]) ?? "unknown",
+    finalText: extractFinalText(run),
+    prUrl,
+    prNumber,
+  };
+}
+
+// --- GitHub (PR merge detection for the timeline) --------------------------
+
+let octokit: Octokit | null = null;
+
+function getOctokit(): Octokit | null {
+  const token = getGithubToken();
+  if (!token) return null;
+  octokit ??= new Octokit({ auth: token, userAgent: "flylo-ops-console" });
+  return octokit;
+}
+
+// Tag the fix PR so the nightly demo-cleanup workflow can find and close it.
+// These PRs are never merged (the demo recovers via the flag), so labelling
+// them keeps housekeeping trivial. Best effort.
+export async function addDemoLabel(prNumber: number): Promise<void> {
+  const client = getOctokit();
+  if (!client) return;
+  try {
+    const { owner, repo } = getFixRepoParts();
+    await client.issues.addLabels({
+      owner,
+      repo,
+      issue_number: prNumber,
+      labels: ["demo"],
+    });
+  } catch {
+    // ignore: labelling is best effort
+  }
+}
