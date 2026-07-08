@@ -1,0 +1,133 @@
+name: Nightly restore
+
+# Restores this demo repo to a known-good baseline every night, so anything
+# merged or changed during the day's demos is undone. This repo has no database
+# layer, so it only does the CODE reset: force-reset main to the `demo-baseline`
+# tag. Vercel redeploys the baseline automatically on the push.
+#
+# Guardrails (this force-pushes main, so be careful):
+#   - Only runs on the known FlyLo demo repos (allowlist).
+#   - Aborts loudly if the demo-baseline tag is missing or empty.
+#   - Backs up the current main to a dated `pre-reset-backup-<utc-ts>` tag first,
+#     keeping ~7 nights of undo (older backup tags are pruned from origin).
+#   - Gated by a RUN_NIGHTLY_RESET repo variable (set it to "true" to arm).
+#
+# Promote a new baseline with the separate "Promote demo baseline" workflow.
+
+on:
+  schedule:
+    - cron: "0 8 * * *"   # 08:00 UTC nightly
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Run even if RUN_NIGHTLY_RESET is not 'true'"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nightly-reset-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    env:
+      ALLOWED_REPOS: "flylo-air/booking-backend flylo-air/booking-frontend flylo-air/crew-app flylo-air/web"
+      BASELINE_TAG: demo-baseline
+      BACKUP_PREFIX: pre-reset-backup
+    steps:
+      - name: Gate check
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.force }}" = "true" ]; then
+            echo "Manual force run; skipping RUN_NIGHTLY_RESET gate."
+            echo "armed=true" >> "$GITHUB_ENV"
+          elif [ "${{ vars.RUN_NIGHTLY_RESET }}" != "true" ]; then
+            echo "RUN_NIGHTLY_RESET is not 'true'; not armed. Exiting without changes."
+            echo "armed=false" >> "$GITHUB_ENV"
+          else
+            echo "armed=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Verify this is an allowed demo repo
+        if: env.armed == 'true'
+        run: |
+          set -euo pipefail
+          match=false
+          for r in $ALLOWED_REPOS; do
+            if [ "$r" = "${{ github.repository }}" ]; then match=true; fi
+          done
+          if [ "$match" != "true" ]; then
+            echo "::error::${{ github.repository }} is not in the demo allowlist. Refusing to reset."
+            exit 1
+          fi
+
+      - name: Checkout (full history + tags)
+        if: env.armed == 'true'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Resolve baseline and back up current main
+        if: env.armed == 'true'
+        run: |
+          set -euo pipefail
+          git fetch origin "refs/tags/${BASELINE_TAG}:refs/tags/${BASELINE_TAG}" || true
+          if ! git rev-parse -q --verify "refs/tags/${BASELINE_TAG}" >/dev/null; then
+            echo "::error::Baseline tag ${BASELINE_TAG} not found. Aborting (will not touch main)."
+            exit 1
+          fi
+          BASELINE_SHA="$(git rev-list -n1 "refs/tags/${BASELINE_TAG}")"
+          if [ -z "$BASELINE_SHA" ]; then
+            echo "::error::Baseline resolved empty. Aborting."
+            exit 1
+          fi
+          echo "Baseline ${BASELINE_TAG} -> ${BASELINE_SHA}"
+          echo "BASELINE_SHA=${BASELINE_SHA}" >> "$GITHUB_ENV"
+          CURRENT_MAIN="$(git rev-parse origin/main)"
+          BACKUP_TAG="${BACKUP_PREFIX}-$(date -u +%Y%m%d-%H%M%S)"
+          echo "Backing up current main ${CURRENT_MAIN} to tag ${BACKUP_TAG}"
+          git tag -f "${BACKUP_TAG}" "${CURRENT_MAIN}"
+          git push -f origin "refs/tags/${BACKUP_TAG}"
+          echo "BACKUP_TAG=${BACKUP_TAG}" >> "$GITHUB_ENV"
+          echo "Pruning old backup tags, keeping the 7 most recent..."
+          mapfile -t tags < <(git ls-remote --tags origin "refs/tags/${BACKUP_PREFIX}-*" | awk '{print $2}' | sed 's#refs/tags/##' | sort)
+          count=${#tags[@]}
+          if [ "$count" -gt 7 ]; then
+            remove=$(( count - 7 ))
+            for t in "${tags[@]:0:$remove}"; do
+              echo "Pruning old backup tag ${t}"
+              git push origin ":refs/tags/${t}" || true
+            done
+          else
+            echo "Found ${count} backup tags; nothing to prune."
+          fi
+
+      - name: Force-reset main to baseline
+        if: env.armed == 'true'
+        run: |
+          set -euo pipefail
+          if [ "$(git rev-parse origin/main)" = "${BASELINE_SHA}" ]; then
+            echo "main already at baseline; nothing to reset."
+            echo "RESET_DONE=already at baseline (${BASELINE_SHA})" >> "$GITHUB_ENV"
+          else
+            git push --force origin "${BASELINE_SHA}:refs/heads/main"
+            echo "main force-reset to ${BASELINE_SHA}"
+            echo "RESET_DONE=reset to ${BASELINE_SHA}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Nightly restore summary"
+            echo ""
+            echo "- Repo: ${{ github.repository }}"
+            echo "- Armed: ${armed:-unknown}"
+            echo "- Reset: ${RESET_DONE:-no reset (not armed or aborted)}"
+            echo "- Backup tag: ${BACKUP_TAG:-none}"
+          } >> "$GITHUB_STEP_SUMMARY"
