@@ -175,6 +175,7 @@ export type BookingTotals = {
   mealsEur: number;
   taxesEur: number;
   surfaceEur: number;
+  discountEur: number;
   totalEur: number;
 };
 
@@ -184,6 +185,7 @@ export type Booking = {
   contact: BookingContact;
   pax: number;
   currency: "EUR";
+  promoCode: string | null;
   totals: BookingTotals;
   holdExpiresAt: string | null;
   createdAt: string;
@@ -438,6 +440,27 @@ export const bookingApi = {
       ...init,
       method: "POST",
       body: JSON.stringify({ assignments }),
+    }),
+
+  applyPromo: async (
+    pnr: string,
+    code: string,
+    init?: ApiRequestInit,
+  ): Promise<{ booking: Booking }> =>
+    request(`/v1/bookings/${encodeURIComponent(pnr)}/promo`, {
+      ...init,
+      method: "POST",
+      body: JSON.stringify({ code }),
+    }),
+
+  removePromo: async (
+    pnr: string,
+    init?: ApiRequestInit,
+  ): Promise<{ booking: Booking }> =>
+    request(`/v1/bookings/${encodeURIComponent(pnr)}/promo`, {
+      ...init,
+      method: "POST",
+      body: JSON.stringify({ code: "" }),
     }),
 
   createPaymentIntent: async (

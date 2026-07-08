@@ -124,6 +124,13 @@ export default async function ConfirmationPage({
               <Row k="Dining" v={formatFare(booking.totals.mealsEur)} />
               <Row k="Taxes" v={formatFare(booking.totals.taxesEur)} />
               <Row k="Surface" v={formatFare(booking.totals.surfaceEur)} />
+              {booking.totals.discountEur > 0 && (
+                <Row
+                  k={booking.promoCode ? `Discount (${booking.promoCode})` : "Discount"}
+                  v={`-${formatFare(booking.totals.discountEur)}`}
+                  accent
+                />
+              )}
             </dl>
             <div className="mt-4 border-t border-[color:var(--rule)] pt-4">
               <div className="flex items-baseline justify-between">
@@ -286,13 +293,27 @@ function BoardingPass({
   );
 }
 
-function Row({ k, v }: { k: string; v: string }) {
+function Row({
+  k,
+  v,
+  accent = false,
+}: {
+  k: string;
+  v: string;
+  accent?: boolean;
+}) {
   return (
     <div className="flex items-baseline justify-between gap-3 py-1">
-      <dt className="text-[10px] uppercase tracking-[0.1em] text-[color:var(--ink-mute)]">
+      <dt
+        className={`text-[10px] uppercase tracking-[0.1em] ${accent ? "text-[color:var(--signal)]" : "text-[color:var(--ink-mute)]"}`}
+      >
         {k}
       </dt>
-      <dd className="tabular-nums text-right text-[color:var(--ink)]">{v}</dd>
+      <dd
+        className={`tabular-nums text-right ${accent ? "text-[color:var(--signal)]" : "text-[color:var(--ink)]"}`}
+      >
+        {v}
+      </dd>
     </div>
   );
 }

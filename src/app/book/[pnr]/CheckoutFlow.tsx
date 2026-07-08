@@ -211,6 +211,18 @@ export function CheckoutFlow({ initialBooking, seatMap }: Props) {
     }
   };
 
+  const applyPromoCode = async (code: string): Promise<Booking> => {
+    const { booking: next } = await bookingApi.applyPromo(booking.pnr, code);
+    setBooking(next);
+    return next;
+  };
+
+  const removePromoCode = async (): Promise<Booking> => {
+    const { booking: next } = await bookingApi.removePromo(booking.pnr);
+    setBooking(next);
+    return next;
+  };
+
   const updatePassengerSelection = (
     passengerNo: number,
     patch: Partial<Pick<Booking["passengers"][number], "seatId" | "mealId">>,
@@ -508,7 +520,12 @@ export function CheckoutFlow({ initialBooking, seatMap }: Props) {
           </div>
         </div>
 
-        <Summary booking={booking} segment={segment} />
+        <Summary
+          booking={booking}
+          segment={segment}
+          onApplyPromo={applyPromoCode}
+          onRemovePromo={removePromoCode}
+        />
       </div>
     </section>
   );
@@ -1144,10 +1161,15 @@ function ReviewStep({
 function Summary({
   booking,
   segment,
+  onApplyPromo,
+  onRemovePromo,
 }: {
   booking: Booking;
   segment?: Booking["segments"][number];
+  onApplyPromo: (code: string) => Promise<Booking>;
+  onRemovePromo: () => Promise<Booking>;
 }) {
+  const hasDiscount = booking.totals.discountEur > 0;
   return (
     <aside aria-label="Reservation summary">
       <div className="sticky top-24 border border-[color:var(--rule)] bg-[color:var(--paper-2)]/40">
@@ -1210,7 +1232,21 @@ function Summary({
             <SummaryRow k="Dining" v={formatFare(booking.totals.mealsEur)} />
             <SummaryRow k="Taxes" v={formatFare(booking.totals.taxesEur)} />
             <SummaryRow k="Surface" v={formatFare(booking.totals.surfaceEur)} />
+            {hasDiscount && (
+              <SummaryRow
+                k={booking.promoCode ? `Discount (${booking.promoCode})` : "Discount"}
+                v={`-${formatFare(booking.totals.discountEur)}`}
+                accent
+              />
+            )}
           </div>
+
+          <PromoField
+            promoCode={booking.promoCode}
+            onApplyPromo={onApplyPromo}
+            onRemovePromo={onRemovePromo}
+          />
+
           <p className="mt-4 text-[11px] leading-[1.55] text-[color:var(--ink-mute)]">
             Demonstration checkout. Mirrors a live booking but no payment is
             processed.
@@ -1218,6 +1254,117 @@ function Summary({
         </div>
       </div>
     </aside>
+  );
+}
+
+// --- Promo code field ---------------------------------------------------
+
+function PromoField({
+  promoCode,
+  onApplyPromo,
+  onRemovePromo,
+}: {
+  promoCode: string | null;
+  onApplyPromo: (code: string) => Promise<Booking>;
+  onRemovePromo: () => Promise<Booking>;
+}) {
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const apply = async () => {
+    const trimmed = code.trim();
+    if (!trimmed || busy) return;
+    setError(null);
+    setBusy(true);
+    try {
+      await onApplyPromo(trimmed);
+      setCode("");
+    } catch (err) {
+      const message =
+        err instanceof ApiError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : String(err);
+      setError(message || "That code could not be applied.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async () => {
+    if (busy) return;
+    setError(null);
+    setBusy(true);
+    try {
+      await onRemovePromo();
+    } catch (err) {
+      const message =
+        err instanceof ApiError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : String(err);
+      setError(message || "That code could not be removed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="mt-4 border-t border-[color:var(--rule)] pt-4">
+      <p className="eyebrow">Promo code</p>
+      {promoCode ? (
+        <div className="mt-3 flex items-center justify-between gap-3 border border-[color:var(--signal)] bg-[color:var(--paper)] px-3 py-2">
+          <span className="flex items-center gap-2 font-mono text-[12px] uppercase tracking-[0.12em] text-[color:var(--signal)]">
+            <span aria-hidden>✓</span>
+            <span className="tabular-nums">{promoCode}</span>
+          </span>
+          <button
+            type="button"
+            onClick={remove}
+            disabled={busy}
+            className="font-mono text-[11px] uppercase tracking-[0.12em] text-[color:var(--ink-mute)] underline underline-offset-2 disabled:opacity-50"
+          >
+            {busy ? "Removing…" : "Remove"}
+          </button>
+        </div>
+      ) : (
+        <div className="mt-3 flex items-stretch gap-2">
+          <input
+            type="text"
+            value={code}
+            onChange={(e) => setCode(e.target.value.toUpperCase())}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void apply();
+              }
+            }}
+            placeholder="e.g. FLASH20"
+            aria-label="Promo code"
+            className="min-w-0 flex-1 border border-[color:var(--rule)] bg-[color:var(--paper)] px-3 py-2 font-mono text-[13px] uppercase tracking-[0.1em] tabular-nums outline-none placeholder:normal-case placeholder:tracking-normal placeholder:text-[color:var(--ink-mute)]"
+          />
+          <button
+            type="button"
+            onClick={apply}
+            disabled={busy || !code.trim()}
+            className="btn-ink shrink-0 px-4 py-2 text-[12px] disabled:opacity-50"
+          >
+            {busy ? "Applying…" : "Apply"}
+          </button>
+        </div>
+      )}
+      {error && (
+        <p
+          role="alert"
+          className="mt-2 font-mono text-[11px] uppercase tracking-[0.1em] text-[color:var(--accent)]"
+        >
+          {error}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -1294,13 +1441,27 @@ function ReviewBlock({
   );
 }
 
-function SummaryRow({ k, v }: { k: string; v: string }) {
+function SummaryRow({
+  k,
+  v,
+  accent = false,
+}: {
+  k: string;
+  v: string;
+  accent?: boolean;
+}) {
   return (
     <div className="flex items-baseline justify-between gap-3 py-1">
-      <dt className="text-[10px] uppercase tracking-[0.1em] text-[color:var(--ink-mute)]">
+      <dt
+        className={`text-[10px] uppercase tracking-[0.1em] ${accent ? "text-[color:var(--signal)]" : "text-[color:var(--ink-mute)]"}`}
+      >
         {k}
       </dt>
-      <dd className="tabular-nums text-right text-[color:var(--ink)]">{v}</dd>
+      <dd
+        className={`tabular-nums text-right ${accent ? "text-[color:var(--signal)]" : "text-[color:var(--ink)]"}`}
+      >
+        {v}
+      </dd>
     </div>
   );
 }
