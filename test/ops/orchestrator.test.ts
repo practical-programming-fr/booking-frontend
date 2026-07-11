@@ -400,3 +400,136 @@ describe("outage scenario is unchanged", () => {
     expect(slackHas("outage_recovery")).toBe(true);
   });
 });
+
+// Helper to seed a resolved outage incident that resolved `resolvedAgoMs` ago,
+// used to drive the cooldown / re-trigger regression scenarios.
+function seedResolvedOutage(resolvedAgoMs: number): void {
+  const started = new Date(Date.now() - resolvedAgoMs - 1000).toISOString();
+  const resolvedAt = new Date(Date.now() - resolvedAgoMs).toISOString();
+  h.store.incidents.push({
+    id: `inc_resolved_${h.store.seq++}`,
+    status: "resolved",
+    kind: "outage",
+    title: "Booking API 5xx on pricing path",
+    startedAt: started,
+    resolvedAt,
+    events: [{ at: started, kind: "detected", message: "x" }],
+    summarizerAgentId: null,
+    fixerAgentId: null,
+    summaryPosted: true,
+    prUrl: null,
+    prNumber: null,
+    prPosted: false,
+    greenTicks: 1,
+    updatedAt: resolvedAt,
+  });
+}
+
+describe("outage re-trigger loop is fixed", () => {
+  it("regression: resolved incident with stale 5xx in the window and flag OFF does not re-open", async () => {
+    process.env.SPIKE_TTL_SECONDS = "999";
+    delete process.env.INCIDENT_REDETECT_COOLDOWN_SECONDS;
+    delete process.env.MAX_INCIDENTS_PER_HOUR;
+    h.store.agentsAvailable = false;
+    // The exact bug: probes are healthy and the flag is off, but the old error
+    // is still inside the trailing 180s window (count5xx stays above threshold).
+    h.store.healthy = true;
+    h.store.errorCount = 5;
+    h.setFlag(OUTAGE, false);
+    // An outage that resolved a moment ago (this cron minute follows recovery).
+    seedResolvedOutage(1000);
+
+    await runTick();
+
+    // No NEW incident: the only outage is still the one that already resolved.
+    expect(incidentsOfKind("outage")).toHaveLength(1);
+    expect(incidentsOfKind("outage")[0].status).toBe("resolved");
+    expect(slackHas("outage_detection")).toBe(false);
+  });
+
+  it("cooldown blocks re-detection, then allows it once the cooldown elapses", async () => {
+    process.env.SPIKE_TTL_SECONDS = "999";
+    process.env.INCIDENT_REDETECT_COOLDOWN_SECONDS = "300";
+    delete process.env.MAX_INCIDENTS_PER_HOUR;
+    h.store.agentsAvailable = false;
+    h.store.healthy = true; // site is healthy; flag is off
+    h.store.errorCount = 5; // trailing 5xx above threshold
+    h.setFlag(OUTAGE, false);
+
+    // Resolved 30s ago: inside the 300s cooldown -> stale errors cannot re-open.
+    seedResolvedOutage(30_000);
+    await runTick();
+    expect(incidentsOfKind("outage")).toHaveLength(1);
+    expect(slackHas("outage_detection")).toBe(false);
+
+    // Resolved 400s ago: past the cooldown -> the residual count path may fire.
+    h.reset();
+    process.env.SPIKE_TTL_SECONDS = "999";
+    process.env.INCIDENT_REDETECT_COOLDOWN_SECONDS = "300";
+    h.store.agentsAvailable = false;
+    h.store.healthy = true;
+    h.store.errorCount = 5;
+    h.setFlag(OUTAGE, false);
+    seedResolvedOutage(400_000);
+    await runTick();
+    // A fresh incident was opened once the cooldown elapsed (it may resolve in
+    // the same tick because probes are healthy; what matters is it re-detected).
+    const outages = incidentsOfKind("outage");
+    expect(outages).toHaveLength(2);
+    expect(slackHas("outage_detection")).toBe(true);
+  });
+
+  it("per-hour cap blocks a further incident even when the outage is active", async () => {
+    process.env.SPIKE_TTL_SECONDS = "999";
+    process.env.MAX_INCIDENTS_PER_HOUR = "6";
+    delete process.env.INCIDENT_REDETECT_COOLDOWN_SECONDS;
+    h.store.agentsAvailable = false;
+    // Outage is genuinely active right now (flag on) so detection WANTS to fire.
+    h.store.healthy = false;
+    h.store.errorCount = 5;
+    h.setFlag(OUTAGE, true);
+    // Six outage incidents already opened within the last hour.
+    for (let n = 0; n < 6; n++) seedResolvedOutage(60_000 * (n + 1));
+    expect(incidentsOfKind("outage")).toHaveLength(6);
+
+    await runTick();
+
+    // Cap holds: no seventh incident, and no fresh detection ping.
+    expect(incidentsOfKind("outage")).toHaveLength(6);
+    expect(slackHas("outage_detection")).toBe(false);
+  });
+
+  it("happy path: flag on opens ONE incident, flag off recovers ONCE and stays resolved", async () => {
+    process.env.SPIKE_TTL_SECONDS = "999";
+    delete process.env.INCIDENT_REDETECT_COOLDOWN_SECONDS;
+    delete process.env.MAX_INCIDENTS_PER_HOUR;
+    h.store.agentsAvailable = false;
+
+    // 1) Outage begins: flag on, probes unhealthy -> exactly one incident opens.
+    h.store.healthy = false;
+    h.store.errorCount = 3;
+    h.setFlag(OUTAGE, true);
+    await runTick();
+    expect(incidentsOfKind("outage")).toHaveLength(1);
+    expect(incidentsOfKind("outage")[0].status).toBe("open");
+    expect(slackHas("outage_detection")).toBe(true);
+
+    // 2) Fix applied: flag off, site healthy. Old errors still in the window.
+    h.setFlag(OUTAGE, false);
+    h.store.healthy = true;
+    h.store.errorCount = 5;
+    await runTick();
+    expect(incidentsOfKind("outage")).toHaveLength(1);
+    expect(incidentsOfKind("outage")[0].status).toBe("resolved");
+    expect(slackHas("outage_recovery")).toBe(true);
+
+    // 3) The very next cron minute must NOT re-open (stale errors + cooldown).
+    await runTick();
+    const outages = incidentsOfKind("outage");
+    expect(outages).toHaveLength(1);
+    expect(outages[0].status).toBe("resolved");
+    // The whole flow detected exactly once and recovered exactly once: no loop.
+    expect(outages[0].events.filter((e) => e.kind === "detected")).toHaveLength(1);
+    expect(outages[0].events.filter((e) => e.kind === "recovered")).toHaveLength(1);
+  });
+});

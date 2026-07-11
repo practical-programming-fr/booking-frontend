@@ -6,6 +6,8 @@ import {
   INCIDENT_WINDOW_SECONDS,
   RECOVERY_GREEN_TICKS,
   SPIKE_FLAG,
+  getIncidentRedetectCooldownSeconds,
+  getMaxIncidentsPerHour,
   getOutageTtlMinutes,
   getSpikeTtlSeconds,
 } from "./config";
@@ -178,7 +180,11 @@ async function runOutageTick(
     }
   }
 
-  let incident = await fetchOpenIncidentByKind("outage");
+  // Read a window of recent incidents once: it gives us the open outage plus
+  // the state needed for the post-recovery cooldown and the per-hour cap.
+  const recent = await fetchIncidents(50);
+  let incident =
+    recent.find((i) => i.status === "open" && incidentKind(i) === "outage") ?? null;
 
   if (autoExpired && incident) {
     await appendIncidentEvent(
@@ -187,9 +193,41 @@ async function runOutageTick(
     );
   }
 
-  const shouldDetect =
-    !incident &&
-    (options.force || count5xx >= INCIDENT_ERROR_THRESHOLD || (!healthy && !probesAreOnlyTimeouts(probes)));
+  // Is the outage actually happening right now? The outage is deterministically
+  // controlled by the fare flag (and by genuinely unhealthy probes), so this,
+  // not a trailing 5xx count, is the real detection signal. Stale 5xx still
+  // inside the trailing window must not keep re-tripping detection once the flag
+  // is off and the site is healthy again.
+  // Read the enabled state from the (possibly auto-expiry refreshed) flags, not
+  // the pre-expiry snapshot, so an expired flag reads as off here.
+  const outageEnabledNow =
+    flags.find((f) => f.key === FARE_ADJUSTMENT_FLAG)?.enabled ?? false;
+  const outageActiveNow =
+    outageEnabledNow || (!healthy && !probesAreOnlyTimeouts(probes));
+
+  // Post-recovery cooldown: after an outage incident resolves, do not open a new
+  // one for a while unless the outage is observed again by the flag/probe test.
+  // This blocks trailing-window and flap re-triggering (the 163-incident loop).
+  const cooldownSeconds = getIncidentRedetectCooldownSeconds();
+  const sinceResolvedSeconds = lastResolvedOutageAgeSeconds(recent);
+  const inCooldown = sinceResolvedSeconds < cooldownSeconds;
+
+  // Hard safety cap: never open more than N outage incidents per trailing hour.
+  const openedLastHour = outageIncidentsInLastHour(recent);
+  const capReached = openedLastHour >= getMaxIncidentsPerHour();
+
+  // Detection wants to fire on a live outage (flag/probe) or, as a residual
+  // path, on genuinely elevated trailing 5xx above the threshold. The count
+  // alone can only fire outside the cooldown, so it can never resurrect a just
+  // resolved incident from errors still aging out of the window.
+  const wantsDetect =
+    options.force || outageActiveNow || count5xx >= INCIDENT_ERROR_THRESHOLD;
+
+  // Cooldown only suppresses re-detection when the outage is NOT active now: a
+  // genuinely new outage (flag flipped back on / probes unhealthy) still opens.
+  const cooldownBlocks = inCooldown && !outageActiveNow && !options.force;
+
+  const shouldDetect = !incident && wantsDetect && !cooldownBlocks && !capReached;
 
   // --- Detect --------------------------------------------------------------
   if (shouldDetect) {
@@ -199,6 +237,12 @@ async function runOutageTick(
       event: ev("detected", `Elevated 5xx on the booking pricing path (${count5xx} in ${INCIDENT_WINDOW_SECONDS}s).`),
     });
     await postSlack(detectionBlocks(count5xx));
+  } else if (!incident && wantsDetect && capReached) {
+    // Detection would have fired but the per-hour cap tripped. Skip loudly so
+    // the safety limit is visible in logs without creating another incident.
+    console.warn(
+      `[ops/tick] outage detection suppressed: ${openedLastHour} incidents already opened in the last hour (cap ${getMaxIncidentsPerHour()}).`,
+    );
   }
 
   // --- Progress an open incident ------------------------------------------
@@ -381,6 +425,29 @@ async function runSpikeTick(flags: OpsFlag[]): Promise<OpsFlag[]> {
   }
 
   return flags;
+}
+
+// Seconds since the most recent RESOLVED outage incident resolved, or Infinity
+// if none has resolved. Drives the post-recovery cooldown.
+function lastResolvedOutageAgeSeconds(recent: OpsIncident[]): number {
+  let newest = 0;
+  for (const i of recent) {
+    if (incidentKind(i) !== "outage" || i.status !== "resolved" || !i.resolvedAt) {
+      continue;
+    }
+    const t = new Date(i.resolvedAt).getTime();
+    if (Number.isFinite(t) && t > newest) newest = t;
+  }
+  return newest === 0 ? Number.POSITIVE_INFINITY : (Date.now() - newest) / 1000;
+}
+
+// How many outage incidents were created within the trailing hour. Drives the
+// per-hour safety cap.
+function outageIncidentsInLastHour(recent: OpsIncident[]): number {
+  const cutoff = Date.now() - 3600_000;
+  return recent.filter(
+    (i) => incidentKind(i) === "outage" && new Date(i.startedAt).getTime() >= cutoff,
+  ).length;
 }
 
 function probesAreOnlyTimeouts(probes: { status: number }[]): boolean {

@@ -71,9 +71,32 @@ export function getCronSecret(): string | undefined {
 // auto-expires), so one clean probe is enough.
 export const RECOVERY_GREEN_TICKS = 1;
 
-// 5xx count (in the trailing window) that trips an incident.
-export const INCIDENT_ERROR_THRESHOLD = 1;
+// Minimum 5xx count (in the trailing window) that can contribute to opening an
+// incident. Detection is anchored to the outage flag / unhealthy probes (see
+// the orchestrator), so this only guards a residual count-based path: it is set
+// above 1 so a single stray 5xx never opens an incident on its own.
+export const INCIDENT_ERROR_THRESHOLD = 3;
 export const INCIDENT_WINDOW_SECONDS = 180;
+
+// After an outage incident resolves, suppress opening a NEW outage incident for
+// this many seconds unless the outage is observed again by the flag/probe test.
+// This is the belt-and-suspenders against trailing-window and flap
+// re-triggering: stale 5xx still inside INCIDENT_WINDOW_SECONDS can no longer
+// re-open an incident during the cooldown. 0 disables the cooldown.
+export function getIncidentRedetectCooldownSeconds(): number {
+  const raw = process.env.INCIDENT_REDETECT_COOLDOWN_SECONDS;
+  const n = raw ? Number.parseInt(raw, 10) : NaN;
+  return Number.isFinite(n) && n >= 0 ? n : 300;
+}
+
+// Hard safety cap: never open more than this many outage incidents within a
+// trailing hour, no matter what detection says. This caps Slack spam and, once
+// cloud agents are enabled, cloud-agent spend, even if something upstream flaps.
+export function getMaxIncidentsPerHour(): number {
+  const raw = process.env.MAX_INCIDENTS_PER_HOUR;
+  const n = raw ? Number.parseInt(raw, 10) : NaN;
+  return Number.isFinite(n) && n >= 1 ? n : 6;
+}
 
 // Safety net: if the outage flag is left on longer than this, the orchestrator
 // flips it back off so a forgotten demo self-heals. 0 disables auto-expiry.
