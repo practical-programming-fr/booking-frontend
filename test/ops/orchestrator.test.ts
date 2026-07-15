@@ -112,6 +112,18 @@ vi.mock("@/lib/ops/backend", () => {
       inc.updatedAt = new Date().toISOString();
       return inc;
     },
+    // Per-session demo API: no active sessions in these tests, so the scoped
+    // arc is a no-op and the global path behavior is what we assert.
+    listDemoSessions: async () => [],
+    createDemoSession: async (input: { id: string }) => ({
+      id: input.id,
+      active: true,
+      slackChannel: null,
+      runFullArc: true,
+      createdAt: new Date().toISOString(),
+      expiresAt: null,
+    }),
+    deactivateDemoSession: async () => {},
   };
 });
 

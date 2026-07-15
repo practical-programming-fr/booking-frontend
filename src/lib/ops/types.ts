@@ -9,6 +9,29 @@ export const OUTAGE_FLAG_KEY = "fare_adjustment_v2";
 // without importing the server-only config module).
 export const SPIKE_FLAG_KEY = "traffic_spike_sim";
 
+// Per-session ("scoped") outage plumbing. The backend serves 500s only to a
+// request that carries this header with the value of an active demo session, so
+// a presenter can break the site for their own browser without affecting anyone
+// else. The cookie holds that session id first-party on the booking site and is
+// forwarded as the header on every booking API call. Kept here (pure, no
+// server-only import) so both the browser and server code paths can share them.
+export const DEMO_SESSION_HEADER = "x-demo-session";
+export const DEMO_SESSION_COOKIE = "flylo_demo_session";
+
+// A per-session demo outage record as returned by the booking-backend
+// /v1/_ops/demo-sessions API. The backend shapes are assumed and normalized in
+// backend.ts (normalizeDemoSession), so this is the single tolerant shape the
+// rest of the app works with. `runFullArc` false means "visual outage only"
+// (quiet mode): the site still 500s but the orchestrator opens no incident.
+export type DemoSession = {
+  id: string;
+  active: boolean;
+  slackChannel: string | null;
+  runFullArc: boolean;
+  createdAt: string | null;
+  expiresAt: string | null;
+};
+
 // Incident kinds. "outage" is the real bug that gets a fix PR; "spike" is the
 // benign transient (degraded performance) that an agent investigates and
 // concludes is a non-issue. The backend check constraint allows both values.

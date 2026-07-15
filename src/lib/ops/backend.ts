@@ -1,7 +1,14 @@
 import "server-only";
 
 import { getBackendBaseUrl, getOpsSharedSecret } from "./config";
-import type { OpsError, OpsFlag, OpsIncident, IncidentEvent, IncidentKind } from "./types";
+import type {
+  DemoSession,
+  OpsError,
+  OpsFlag,
+  OpsIncident,
+  IncidentEvent,
+  IncidentKind,
+} from "./types";
 
 // A missing kind on a row predates the kind column; treat it as an outage.
 export function incidentKind(incident: OpsIncident): IncidentKind {
@@ -60,17 +67,29 @@ export async function setFlag(
   return data.flags;
 }
 
-export async function fetchErrors(limit = 50): Promise<OpsError[]> {
-  const data = await opsFetch<{ errors: OpsError[] }>(
-    `/v1/_ops/errors?limit=${limit}`,
-  );
+export async function fetchErrors(
+  limit = 50,
+  demoSessionId?: string,
+): Promise<OpsError[]> {
+  // The demoSessionId query param scopes errors to a single demo session (the
+  // backend stamps demo_session_id on scoped ops_errors rows). It is additive:
+  // a backend that ignores the param simply returns unscoped errors, which is a
+  // harmless superset for the agent prompt.
+  const qs = demoSessionId
+    ? `?limit=${limit}&demoSessionId=${encodeURIComponent(demoSessionId)}`
+    : `?limit=${limit}`;
+  const data = await opsFetch<{ errors: OpsError[] }>(`/v1/_ops/errors${qs}`);
   return data.errors;
 }
 
-export async function fetchErrorCount(sinceSeconds: number): Promise<number> {
-  const data = await opsFetch<{ count: number }>(
-    `/v1/_ops/errors/count?since=${sinceSeconds}`,
-  );
+export async function fetchErrorCount(
+  sinceSeconds: number,
+  demoSessionId?: string,
+): Promise<number> {
+  const qs = demoSessionId
+    ? `?since=${sinceSeconds}&demoSessionId=${encodeURIComponent(demoSessionId)}`
+    : `?since=${sinceSeconds}`;
+  const data = await opsFetch<{ count: number }>(`/v1/_ops/errors/count${qs}`);
   return data.count;
 }
 
@@ -150,4 +169,117 @@ export async function patchIncident(
 
 export async function resetOps(): Promise<void> {
   await opsFetch<{ ok: boolean }>("/v1/_ops/reset", { method: "POST" });
+}
+
+// --- Per-session ("scoped") demo outages -----------------------------------
+//
+// These call the backend's /v1/_ops/demo-sessions routes. The exact request and
+// response shapes are ASSUMED (the backend lives in a separate repo we do not
+// modify here) and normalized in one place (normalizeDemoSession) so they are
+// trivial to adjust if the real shapes differ. See the PR description for the
+// assumed contract.
+
+// Tolerantly read a demo session out of whatever the backend returns. The
+// confirmed backend shape per session is { sessionId (id alias), slackChannel,
+// runFullArc, expiresAt, createdAt, kind }. We still accept snake_case and a
+// couple of aliases defensively, and infer `active` (GET only lists active
+// sessions, so an absent active/status reads as active). Anything missing
+// degrades to a safe default.
+export function normalizeDemoSession(raw: unknown): DemoSession | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const id = (r.sessionId ?? r.id ?? r.demoSessionId ?? r.session_id) as
+    | string
+    | undefined;
+  if (!id || typeof id !== "string") return null;
+  const status = (r.status ?? r.state) as string | undefined;
+  const activeRaw = r.active ?? r.isActive ?? r.is_active;
+  const active =
+    typeof activeRaw === "boolean"
+      ? activeRaw
+      : status
+        ? status === "active" || status === "open"
+        : true;
+  const slackChannel =
+    (r.slackChannel ?? r.slack_channel ?? r.channel ?? null) as string | null;
+  const runFullArcRaw =
+    r.runFullArc ?? r.run_full_arc ?? r.fullArc ?? r.full_arc;
+  const runFullArc =
+    typeof runFullArcRaw === "boolean" ? runFullArcRaw : true;
+  const createdAt = (r.createdAt ?? r.created_at ?? null) as string | null;
+  const expiresAt = (r.expiresAt ?? r.expires_at ?? null) as string | null;
+  return {
+    id,
+    active,
+    slackChannel: slackChannel ?? null,
+    runFullArc,
+    createdAt: createdAt ?? null,
+    expiresAt: expiresAt ?? null,
+  };
+}
+
+function unwrapSessions(data: unknown): DemoSession[] {
+  const arr = Array.isArray(data)
+    ? data
+    : ((data as { sessions?: unknown[] })?.sessions ?? []);
+  return arr
+    .map(normalizeDemoSession)
+    .filter((s): s is DemoSession => s !== null);
+}
+
+export async function createDemoSession(input: {
+  id: string;
+  slackChannel?: string | null;
+  runFullArc: boolean;
+  ttlSeconds: number;
+}): Promise<DemoSession> {
+  // Send both camelCase and snake_case keys so the request works whichever the
+  // backend expects. Extra keys are ignored by well-behaved handlers.
+  const body = {
+    id: input.id,
+    sessionId: input.id,
+    slackChannel: input.slackChannel ?? null,
+    slack_channel: input.slackChannel ?? null,
+    runFullArc: input.runFullArc,
+    run_full_arc: input.runFullArc,
+    ttlSeconds: input.ttlSeconds,
+    ttl_seconds: input.ttlSeconds,
+  };
+  const data = await opsFetch<unknown>("/v1/_ops/demo-sessions", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+  const wrapped = (data as { session?: unknown }).session ?? data;
+  const normalized = normalizeDemoSession(wrapped);
+  // Fall back to the input if the backend returns an empty/odd body: we still
+  // know the id we asked for, and the cookie/plumbing only needs the id.
+  return (
+    normalized ?? {
+      id: input.id,
+      active: true,
+      slackChannel: input.slackChannel ?? null,
+      runFullArc: input.runFullArc,
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + input.ttlSeconds * 1000).toISOString(),
+    }
+  );
+}
+
+export async function deactivateDemoSession(id: string): Promise<void> {
+  // The backend takes the id as a PATH param (no query, no body):
+  //   DELETE /v1/_ops/demo-sessions/:sessionId
+  // It also exposes a POST alias for clients that cannot send a DELETE with a
+  // path param, which we fall back to only if the DELETE fails:
+  //   POST /v1/_ops/demo-sessions/:sessionId/end
+  const path = `/v1/_ops/demo-sessions/${encodeURIComponent(id)}`;
+  try {
+    await opsFetch<unknown>(path, { method: "DELETE" });
+  } catch {
+    await opsFetch<unknown>(`${path}/end`, { method: "POST" });
+  }
+}
+
+export async function listDemoSessions(): Promise<DemoSession[]> {
+  const data = await opsFetch<unknown>("/v1/_ops/demo-sessions");
+  return unwrapSessions(data);
 }

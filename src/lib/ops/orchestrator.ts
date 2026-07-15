@@ -42,6 +42,7 @@ import {
   spikeRecoveredBlocks,
   summaryBlocks,
 } from "./slack";
+import { isSessionScopedIncident, runDemoSessionsTick } from "./demo";
 import type { IncidentEvent, OpsError, OpsFlag, OpsIncident, OpsSnapshot } from "./types";
 
 function ev(kind: string, message: string, data?: Record<string, unknown>): IncidentEvent {
@@ -81,10 +82,16 @@ function snapshotShape(
 ): OpsSnapshot {
   const outage = flags.find((f) => f.key === FARE_ADJUSTMENT_FLAG);
   const spike = flags.find((f) => f.key === SPIKE_FLAG);
+  // The global snapshot ignores per-session ("scoped") demo incidents so they
+  // never clobber the global view; those are surfaced to presenters via the
+  // /api/ops/demo/status route instead.
+  const globalOutage = (i: OpsIncident) =>
+    incidentKind(i) === "outage" && !isSessionScopedIncident(i);
   const openOutage =
-    recent.find((i) => i.status === "open" && incidentKind(i) === "outage") ?? null;
+    recent.find((i) => i.status === "open" && globalOutage(i)) ?? null;
   const openSpike =
     recent.find((i) => i.status === "open" && incidentKind(i) === "spike") ?? null;
+  const recentGlobal = recent.filter((i) => !isSessionScopedIncident(i));
   return {
     now: new Date().toISOString(),
     outageEnabled: outage?.enabled ?? false,
@@ -95,7 +102,7 @@ function snapshotShape(
     errorRate5xx: count5xx,
     // Prefer the open outage, then the open transient, then the most recent
     // incident (so the resolved/recovered state stays on the timeline).
-    incident: openOutage ?? openSpike ?? recent[0] ?? null,
+    incident: openOutage ?? openSpike ?? recentGlobal[0] ?? null,
     spikeIncident: openSpike,
     agentsAvailable: agentsAvailable(),
   };
@@ -133,6 +140,15 @@ export async function runTick(options: TickOptions = {}): Promise<OpsSnapshot> {
     flags = await runSpikeTick(flags);
   } catch (err) {
     console.warn("[ops/tick] transient handling failed:", errMsg(err));
+  }
+
+  // --- PER-SESSION: scoped demo outages, one independent arc per session ---
+  // Additive: does nothing when there are no active demo sessions (or when the
+  // backend/secret is not configured). Never touches the global incident.
+  try {
+    await runDemoSessionsTick();
+  } catch (err) {
+    console.warn("[ops/tick] demo session handling failed:", errMsg(err));
   }
 
   // Read incidents fresh so the returned snapshot reflects every event appended
@@ -182,7 +198,12 @@ async function runOutageTick(
 
   // Read a window of recent incidents once: it gives us the open outage plus
   // the state needed for the post-recovery cooldown and the per-hour cap.
-  const recent = await fetchIncidents(50);
+  // Per-session ("scoped") demo incidents are filtered out here so the global
+  // path never picks one up, and so scoped incidents do not consume the global
+  // cooldown or per-hour cap. The scoped arc runs independently in demo.ts.
+  const recent = (await fetchIncidents(50)).filter(
+    (i) => !isSessionScopedIncident(i),
+  );
   let incident =
     recent.find((i) => i.status === "open" && incidentKind(i) === "outage") ?? null;
 

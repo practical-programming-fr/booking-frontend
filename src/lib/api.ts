@@ -7,6 +7,7 @@
 // cookie set by the client-side helper.
 
 import { getSessionIdForServer, getOrCreateSessionId } from "./session";
+import { resolveDemoSessionId, DEMO_SESSION_HEADER } from "./demo-session";
 
 export type Airport = {
   iata: string;
@@ -274,6 +275,16 @@ async function request<T>(path: string, init: ApiRequestInit = {}): Promise<T> {
   const sessionId = await resolveSessionId(init.sessionId);
   if (sessionId) {
     headers.set("x-booking-session", sessionId);
+  }
+
+  // Forward the per-session demo outage id when this browser is in a scoped
+  // demo. The backend serves 500s only to requests carrying an active demo
+  // session, so this is what makes "the site breaks for me only" work. Sourced
+  // from the flylo_demo_session cookie in both server (RSC/route) and client
+  // paths. No cookie means no header, so normal traffic is unaffected.
+  const demoSessionId = await resolveDemoSessionId();
+  if (demoSessionId) {
+    headers.set(DEMO_SESSION_HEADER, demoSessionId);
   }
 
   const res = await fetch(url, {

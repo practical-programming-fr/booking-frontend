@@ -33,6 +33,23 @@ export function getSlackWebhookUrl(): string | undefined {
   return process.env.SLACK_WEBHOOK_URL || undefined;
 }
 
+// Optional Slack bot token (xoxb-...). When set, the orchestrator can post to a
+// specific channel via the Slack Web API (chat.postMessage), which the single
+// incoming webhook cannot do. Needs the chat:write scope. When unset, posting
+// falls back to the single-channel incoming webhook so nothing breaks.
+export function getSlackBotToken(): string | undefined {
+  return process.env.SLACK_BOT_TOKEN || undefined;
+}
+
+// Optional: allow the orchestrator to auto-create a Slack channel (by name) via
+// conversations.create when a session asks for a channel that does not exist.
+// Needs the channels:manage scope on the bot token. Default OFF: even when a bot
+// token is present we do not create channels unless this is explicitly enabled.
+export function getSlackAutoCreateChannel(): boolean {
+  const raw = process.env.SLACK_AUTO_CREATE_CHANNEL;
+  return raw === "1" || raw === "true" || raw === "yes";
+}
+
 export function getCursorApiKey(): string | undefined {
   return process.env.CURSOR_API_KEY || undefined;
 }
@@ -104,6 +121,42 @@ export function getOutageTtlMinutes(): number {
   const raw = process.env.OUTAGE_TTL_MINUTES;
   const n = raw ? Number.parseInt(raw, 10) : NaN;
   return Number.isFinite(n) && n >= 0 ? n : 20;
+}
+
+// How long a per-session ("scoped") demo outage lives before it self-heals.
+// The trigger route asks the backend to expire the session after this long, and
+// sets the browser cookie with the same TTL, so a forgotten demo cleans itself
+// up on both the backend and the browser. Default aligns with the global outage
+// TTL. Read in minutes.
+export function getDemoSessionTtlMinutes(): number {
+  const raw = process.env.DEMO_SESSION_TTL_MINUTES;
+  const n = raw ? Number.parseInt(raw, 10) : NaN;
+  return Number.isFinite(n) && n >= 1 ? n : 20;
+}
+
+// Cookie domain for the per-session demo cookie. In production the demo runs on
+// book.flylo-air.com and we want the cookie shared across *.flylo-air.com, so it
+// defaults to ".flylo-air.com". Any other host (localhost, Vercel previews) must
+// use a host-only cookie, so the trigger route only applies this domain when the
+// request host actually ends with flylo-air.com (see resolveDemoCookieDomain).
+// An explicit env override wins; set it to an empty string to force host-only.
+export function getDemoCookieDomainSetting(): string | undefined {
+  const raw = process.env.DEMO_SESSION_COOKIE_DOMAIN;
+  if (raw === undefined) return ".flylo-air.com";
+  return raw || undefined;
+}
+
+// Base URL of the crew NOC (network operations center) app. When set, the ops
+// console links a presenter to their scoped session in the NOC via ?demo=<id>,
+// so the crew view can be pointed at that session. Optional: absent means the
+// console just shows the raw session id. Read the public var too so it can be
+// surfaced client-side if ever needed.
+export function getCrewNocUrl(): string | undefined {
+  return (
+    process.env.CREW_NOC_URL ??
+    process.env.NEXT_PUBLIC_CREW_NOC_URL ??
+    undefined
+  );
 }
 
 // How long the benign "degraded performance" scenario runs before it
