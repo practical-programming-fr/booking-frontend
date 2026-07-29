@@ -65,10 +65,21 @@ jobs:
             exit 1
           fi
 
+      - name: Require FLYLO_ADMIN_PAT
+        if: env.armed == 'true'
+        env:
+          FLYLO_ADMIN_PAT: ${{ secrets.FLYLO_ADMIN_PAT }}
+        run: |
+          if [ -z "${FLYLO_ADMIN_PAT}" ]; then
+            echo "::error::FLYLO_ADMIN_PAT secret is empty. Set it to an org-owner fine-grained PAT with Contents/Actions/Workflows R/W so force-push can bypass branch protection."
+            exit 1
+          fi
+
       - name: Checkout (full history + tags)
         if: env.armed == 'true'
         uses: actions/checkout@v4
         with:
+          token: ${{ secrets.FLYLO_ADMIN_PAT }}
           fetch-depth: 0
           fetch-tags: true
 

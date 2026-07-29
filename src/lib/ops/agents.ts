@@ -1,6 +1,6 @@
 import "server-only";
 
-import type { ModelSelection, Run, SDKModel } from "@cursor/sdk";
+import type { ModelSelection, Run, RunResult, RunStatus, SDKModel } from "@cursor/sdk";
 import { Octokit } from "@octokit/rest";
 import {
   getCursorApiKey,
@@ -162,14 +162,19 @@ export type AgentStatus = {
   prNumber: number | null;
 };
 
-function extractFinalText(run: Run): string | null {
-  const direct = (run as { result?: string | null }).result;
-  if (direct && direct.trim()) return direct.trim();
+function extractFinalTextFromResult(result?: string | null): string | null {
+  if (result?.trim()) return result.trim();
   return null;
 }
 
-function extractPr(run: Run): { prUrl: string | null; prNumber: number | null } {
-  const branches = run.git?.branches ?? [];
+function extractFinalText(run: Run): string | null {
+  return extractFinalTextFromResult(run.result);
+}
+
+function extractPrFromGit(
+  git: Run["git"] | RunResult["git"] | undefined,
+): { prUrl: string | null; prNumber: number | null } {
+  const branches = git?.branches ?? [];
   for (const b of branches) {
     if (b.prUrl) {
       const match = /\/pull\/(\d+)/.exec(b.prUrl);
@@ -179,18 +184,73 @@ function extractPr(run: Run): { prUrl: string | null; prNumber: number | null } 
   return { prUrl: null, prNumber: null };
 }
 
+function extractPr(run: Run): { prUrl: string | null; prNumber: number | null } {
+  return extractPrFromGit(run.git);
+}
+
+const TERMINAL_RUN_STATUSES = new Set<RunStatus>(["finished", "error", "cancelled"]);
+
+function runPayloadComplete(run: Run): boolean {
+  return Boolean(extractFinalText(run) || extractPr(run).prUrl);
+}
+
+async function fetchCloudRun(run: Run): Promise<Run> {
+  const { Agent } = await loadSdk();
+  try {
+    return await Agent.getRun(run.id, {
+      runtime: "cloud",
+      agentId: run.agentId,
+      apiKey: getCursorApiKey(),
+    });
+  } catch {
+    return run;
+  }
+}
+
+/** Cloud listRuns snapshots may omit result/git until getRun or wait hydrates them. */
+async function hydrateRunMetadata(run: Run): Promise<Run | RunResult> {
+  let current = run;
+
+  if (current.status === "running") {
+    current = await fetchCloudRun(current);
+    if (current.status === "running") {
+      return current;
+    }
+  }
+
+  if (!TERMINAL_RUN_STATUSES.has(current.status)) {
+    return current;
+  }
+
+  if (!runPayloadComplete(current)) {
+    current = await fetchCloudRun(current);
+  }
+
+  if (!runPayloadComplete(current) && current.supports("wait")) {
+    try {
+      return await current.wait();
+    } catch {
+      return current;
+    }
+  }
+
+  return current;
+}
+
+function agentStatusFromHydrated(hydrated: Run | RunResult): AgentStatus {
+  const status = hydrated.status as AgentStatus["status"];
+  const finalText = extractFinalTextFromResult(hydrated.result);
+  const { prUrl, prNumber } = extractPrFromGit(hydrated.git);
+  return { status: status ?? "unknown", finalText, prUrl, prNumber };
+}
+
 export async function getAgentStatus(agentId: string): Promise<AgentStatus> {
   const run = await getLatestRun(agentId);
   if (!run) {
     return { status: "unknown", finalText: null, prUrl: null, prNumber: null };
   }
-  const { prUrl, prNumber } = extractPr(run);
-  return {
-    status: (run.status as AgentStatus["status"]) ?? "unknown",
-    finalText: extractFinalText(run),
-    prUrl,
-    prNumber,
-  };
+  const hydrated = await hydrateRunMetadata(run);
+  return agentStatusFromHydrated(hydrated);
 }
 
 // --- GitHub (PR merge detection for the timeline) --------------------------
