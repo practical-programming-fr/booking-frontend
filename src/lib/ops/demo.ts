@@ -11,12 +11,12 @@ import {
   patchIncident,
 } from "./backend";
 import {
-  addDemoLabel,
   agentsAvailable,
   getAgentStatus,
   launchFixer,
   launchSummarizer,
 } from "./agents";
+import { ensureDemoLabeled } from "./labeling";
 import {
   detectionBlocks,
   postSlack,
@@ -215,7 +215,7 @@ async function progressSession(
     }
   }
 
-  // --- Fixer opened a PR -> label + post -----------------------------------
+  // --- Fixer opened a PR -> post the link -----------------------------------
   if (incident.fixerAgentId && !incident.prPosted) {
     const status = await getAgentStatus(incident.fixerAgentId);
     if (status.prUrl) {
@@ -224,7 +224,6 @@ async function progressSession(
         prNumber: status.prNumber,
         prPosted: true,
       });
-      if (status.prNumber) await addDemoLabel(status.prNumber);
       await postSlack(prBlocks(status.prUrl, status.prNumber ?? 0), { channel });
       await appendIncidentEvent(
         incident.id,
@@ -234,6 +233,11 @@ async function progressSession(
       );
     }
   }
+
+  // Label the PR `demo` so the nightly demo-cleanup can find and close it.
+  // Retried on every tick until it succeeds; failures are recorded loudly on
+  // the timeline, never swallowed. The label is cleanup's only signal.
+  incident = await ensureDemoLabeled(incident);
 }
 
 async function recoverSession(incident: OpsIncident): Promise<void> {

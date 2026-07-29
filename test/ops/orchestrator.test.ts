@@ -21,6 +21,7 @@ const h = vi.hoisted(() => {
     throwOnCreateKind: null as string | null,
     slackPosts: [] as string[],
     launches: { summarizer: 0, fixer: 0, investigator: 0 },
+    labels: [] as number[],
     seq: 1,
   };
   const reset = () => {
@@ -33,6 +34,7 @@ const h = vi.hoisted(() => {
     store.throwOnCreateKind = null;
     store.slackPosts = [];
     store.launches = { summarizer: 0, fixer: 0, investigator: 0 };
+    store.labels = [];
     store.seq = 1;
   };
   const setFlag = (key: string, enabled: boolean, agoMs = 0) => {
@@ -164,7 +166,11 @@ vi.mock("@/lib/ops/slack", () => {
 
 vi.mock("@/lib/ops/agents", () => ({
   agentsAvailable: () => h.store.agentsAvailable,
-  addDemoLabel: async () => {},
+  DEMO_LABEL: "demo",
+  addDemoLabel: async (_prUrl: string | null, prNumber: number | null) => {
+    if (typeof prNumber === "number") h.store.labels.push(prNumber);
+    return true;
+  },
   getAgentStatus: async () => h.store.agentStatus,
   launchSummarizer: async () => {
     h.store.launches.summarizer++;
@@ -436,6 +442,36 @@ function seedResolvedOutage(resolvedAgoMs: number): void {
     updatedAt: resolvedAt,
   });
 }
+
+describe("demo PR labelling", () => {
+  it("labels the fixer PR 'demo' when it opens and records a pr_labeled event", async () => {
+    process.env.SPIKE_TTL_SECONDS = "999";
+    // Keep the incident open through the PR block (unhealthy probes) so the
+    // label attempt runs in the same tick the PR is discovered.
+    h.store.healthy = false;
+    h.store.errorCount = 5;
+    h.store.agentsAvailable = true;
+    h.store.agentStatus = {
+      status: "finished",
+      finalText: "*Impact:* x. *Likely cause:* y. *Next step:* z.",
+      prUrl: "https://github.com/flylo-air/booking-backend/pull/77",
+      prNumber: 77,
+    };
+    h.setFlag(OUTAGE, true);
+
+    await runTick();
+
+    const outage = incidentsOfKind("outage")[0];
+    expect(outage.prPosted).toBe(true);
+    expect(h.store.labels).toContain(77);
+    expect(outage.events.map((e) => e.kind)).toContain("pr_labeled");
+
+    // A later tick must not re-label: the pr_labeled marker makes it idempotent.
+    h.store.labels = [];
+    await runTick();
+    expect(h.store.labels).not.toContain(77);
+  });
+});
 
 describe("outage re-trigger loop is fixed", () => {
   it("regression: resolved incident with stale 5xx in the window and flag OFF does not re-open", async () => {

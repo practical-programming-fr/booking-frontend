@@ -109,8 +109,10 @@ vi.mock("@/lib/ops/slack", () => {
 
 vi.mock("@/lib/ops/agents", () => ({
   agentsAvailable: () => h.store.agentsAvailable,
-  addDemoLabel: async (n: number) => {
-    h.store.labels.push(n);
+  DEMO_LABEL: "demo",
+  addDemoLabel: async (_prUrl: string | null, prNumber: number | null) => {
+    if (typeof prNumber === "number") h.store.labels.push(prNumber);
+    return true;
   },
   getAgentStatus: async () => h.store.agentStatus,
   launchSummarizer: async () => {

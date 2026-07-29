@@ -57,6 +57,18 @@ The orchestrator runs headless: `/api/ops/tick` (invoked by Vercel Cron, see
 agents, posts to Slack, and opens the fix PR. It drives two paths that never
 clobber each other:
 
+Every fix PR is labelled `demo` so the nightly demo-cleanup can find and close
+it (the PRs are never merged; the demo recovers via the flag, so the label is
+cleanup's only reliable signal). Labelling is deliberately robust: it targets
+the repo from the PR URL, creates the `demo` label in that repo if it is
+missing, retries with backoff, verifies the label actually landed, and records a
+loud `label_error` event on the incident timeline (never a silent swallow) if it
+still cannot apply it. It is retried on later ticks until it succeeds. As a
+belt-and-suspenders for the cleanup side, the fixer is also asked to stamp a
+unique marker (`<!-- flylo-outage-demo-fix -->`) in the PR body so cleanup can
+match these PRs even if a label somehow never lands, without touching unrelated
+PRs. See `src/lib/ops/labeling.ts` and `addDemoLabel` in `src/lib/ops/agents.ts`.
+
 - The GLOBAL outage/spike scenarios, keyed off the seeded feature flags (flipped
   by a separate internal admin app via booking-backend `/v1/_ops`), unchanged.
 - The PER-SESSION scoped outages: each active demo session runs its own

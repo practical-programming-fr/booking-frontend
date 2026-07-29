@@ -25,13 +25,13 @@ import {
 } from "./backend";
 import { runProbes, probesHealthy } from "./probe";
 import {
-  addDemoLabel,
   agentsAvailable,
   getAgentStatus,
   launchFixer,
   launchInvestigator,
   launchSummarizer,
 } from "./agents";
+import { ensureDemoLabeled } from "./labeling";
 import {
   detectionBlocks,
   prBlocks,
@@ -307,8 +307,8 @@ async function runOutageTick(
       }
     }
 
-    // Fixer opened a PR -> label it `demo`, post the link to Slack. The PR is
-    // the review artifact; it is never merged (the demo recovers via the flag).
+    // Fixer opened a PR -> post the link to Slack. The PR is the review
+    // artifact; it is never merged (the demo recovers via the flag).
     if (incident.fixerAgentId && !incident.prPosted) {
       const status = await getAgentStatus(incident.fixerAgentId);
       if (status.prUrl) {
@@ -317,11 +317,16 @@ async function runOutageTick(
           prNumber: status.prNumber,
           prPosted: true,
         });
-        if (status.prNumber) await addDemoLabel(status.prNumber);
         await postSlack(prBlocks(status.prUrl, status.prNumber ?? 0));
         await appendIncidentEvent(incident.id, ev("pr_opened", `Fix PR opened for review: ${status.prUrl}`, { prUrl: status.prUrl }));
       }
     }
+
+    // Label the PR `demo` so the nightly demo-cleanup can find and close it.
+    // Kept separate from the Slack post above (which fires once) and retried on
+    // every tick until it succeeds, because the label is cleanup's only signal.
+    // Labelling failures are recorded loudly on the timeline, never swallowed.
+    incident = await ensureDemoLabeled(incident);
 
     // --- Recover -----------------------------------------------------------
     if (healthy) {
