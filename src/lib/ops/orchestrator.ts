@@ -36,12 +36,17 @@ import {
   detectionBlocks,
   prBlocks,
   postSlack,
+  postSlackWithRef,
   recoveryBlocks,
   spikeDetectedBlocks,
   spikeInvestigationBlocks,
   spikeRecoveredBlocks,
   summaryBlocks,
 } from "./slack";
+import {
+  createSlackThreadEvent,
+  slackReplyOptions,
+} from "./slack-thread";
 import { isSessionScopedIncident, runDemoSessionsTick } from "./demo";
 import type { IncidentEvent, OpsError, OpsFlag, OpsIncident, OpsSnapshot } from "./types";
 
@@ -257,7 +262,13 @@ async function runOutageTick(
       title: "Booking API 5xx on pricing path",
       event: ev("detected", `Elevated 5xx on the booking pricing path (${count5xx} in ${INCIDENT_WINDOW_SECONDS}s).`),
     });
-    await postSlack(detectionBlocks(count5xx));
+    const slackRoot = await postSlackWithRef(detectionBlocks(count5xx));
+    if (slackRoot) {
+      incident = await appendIncidentEvent(
+        incident.id,
+        createSlackThreadEvent(slackRoot),
+      );
+    }
   } else if (!incident && wantsDetect && capReached) {
     // Detection would have fired but the per-hour cap tripped. Skip loudly so
     // the safety limit is visible in logs without creating another incident.
@@ -292,7 +303,10 @@ async function runOutageTick(
       }
     } else if (!incident.summaryPosted) {
       // Degraded local mode: no agents, still show the summary beat.
-      await postSlack(summaryBlocks(SIMULATED_SUMMARY));
+      await postSlack(
+        summaryBlocks(SIMULATED_SUMMARY),
+        slackReplyOptions(incident),
+      );
       incident = await patchIncident(incident.id, { summaryPosted: true });
       await appendIncidentEvent(incident.id, ev("summary_posted", "Incident summary posted to Slack (simulated; no CURSOR_API_KEY)."));
     }
@@ -301,7 +315,10 @@ async function runOutageTick(
     if (incident.summarizerAgentId && !incident.summaryPosted) {
       const status = await getAgentStatus(incident.summarizerAgentId);
       if (status.status === "finished" && status.finalText) {
-        await postSlack(summaryBlocks(status.finalText));
+        await postSlack(
+          summaryBlocks(status.finalText, incident.summarizerAgentId),
+          slackReplyOptions(incident),
+        );
         incident = await patchIncident(incident.id, { summaryPosted: true });
         await appendIncidentEvent(incident.id, ev("summary_posted", "Exec-readable incident summary posted to Slack."));
       }
@@ -317,7 +334,14 @@ async function runOutageTick(
           prNumber: status.prNumber,
           prPosted: true,
         });
-        await postSlack(prBlocks(status.prUrl, status.prNumber ?? 0));
+        await postSlack(
+          prBlocks(
+            status.prUrl,
+            status.prNumber ?? 0,
+            incident.fixerAgentId,
+          ),
+          slackReplyOptions(incident),
+        );
         await appendIncidentEvent(incident.id, ev("pr_opened", `Fix PR opened for review: ${status.prUrl}`, { prUrl: status.prUrl }));
       }
     }
@@ -338,7 +362,7 @@ async function runOutageTick(
           greenTicks: next,
         });
         await appendIncidentEvent(incident.id, ev("recovered", "Pricing endpoints healthy again. Incident resolved."));
-        await postSlack(recoveryBlocks());
+        await postSlack(recoveryBlocks(), slackReplyOptions(incident));
         incident = null;
       } else {
         incident = await patchIncident(incident.id, { greenTicks: next });
@@ -376,7 +400,13 @@ async function runSpikeTick(flags: OpsFlag[]): Promise<OpsFlag[]> {
       title: "Degraded performance on booking API",
       event: ev("detected", "Elevated latency on the booking API. Site is up; investigating."),
     });
-    await postSlack(spikeDetectedBlocks());
+    const slackRoot = await postSlackWithRef(spikeDetectedBlocks());
+    if (slackRoot) {
+      incident = await appendIncidentEvent(
+        incident.id,
+        createSlackThreadEvent(slackRoot),
+      );
+    }
   }
 
   if (!incident) return flags;
@@ -423,7 +453,10 @@ async function runSpikeTick(flags: OpsFlag[]): Promise<OpsFlag[]> {
       conclusion = SIMULATED_INVESTIGATION;
     }
     if (conclusion) {
-      await postSlack(spikeInvestigationBlocks(conclusion));
+      await postSlack(
+        spikeInvestigationBlocks(conclusion, incident.summarizerAgentId),
+        slackReplyOptions(incident),
+      );
       incident = await patchIncident(incident.id, { summaryPosted: true });
       await appendIncidentEvent(
         incident.id,
@@ -447,7 +480,10 @@ async function runSpikeTick(flags: OpsFlag[]): Promise<OpsFlag[]> {
       incident.id,
       ev("recovered", "Transient degradation cleared. Resolved with no action needed."),
     );
-    await postSlack(spikeRecoveredBlocks());
+    await postSlack(
+      spikeRecoveredBlocks(),
+      slackReplyOptions(incident),
+    );
   }
 
   return flags;

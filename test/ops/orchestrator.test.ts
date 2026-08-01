@@ -154,6 +154,13 @@ vi.mock("@/lib/ops/slack", () => {
       h.store.slackPosts.push(post.text);
       return true;
     },
+    postSlackWithRef: async (post: { text: string }) => {
+      h.store.slackPosts.push(post.text);
+      return {
+        channel: "CINCIDENTS",
+        ts: "1712345678.000100",
+      };
+    },
     detectionBlocks: () => record("outage_detection"),
     summaryBlocks: () => record("outage_summary"),
     prBlocks: () => record("outage_pr"),

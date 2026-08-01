@@ -3,6 +3,7 @@ import "server-only";
 import {
   getSlackAutoCreateChannel,
   getSlackBotToken,
+  getSlackDefaultChannel,
   getSlackWebhookUrl,
 } from "./config";
 
@@ -31,6 +32,13 @@ export type SlackPostOptions = {
   // Channel id (e.g. C0123ABCD) or channel name (e.g. "incidents" / "#incidents")
   // to route this post to. Only honored when a bot token is configured.
   channel?: string | null;
+  // Timestamp of the root Slack message. Replies stay inside that thread.
+  threadTs?: string | null;
+};
+
+export type SlackMessageRef = {
+  channel: string;
+  ts: string;
 };
 
 // Note the intended channel inside the message when we cannot actually route to
@@ -58,7 +66,10 @@ function normalizeChannelLabel(channel: string): string {
   return c.startsWith("#") ? c : `#${c}`;
 }
 
-async function postViaWebhook(post: SlackPost): Promise<boolean> {
+async function postViaWebhook(
+  post: SlackPost,
+  threadTs?: string,
+): Promise<boolean> {
   const url = getSlackWebhookUrl();
   if (!url) {
     console.log("[ops/slack] (no webhook configured)\n" + post.text);
@@ -68,7 +79,10 @@ async function postViaWebhook(post: SlackPost): Promise<boolean> {
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(post),
+      body: JSON.stringify({
+        ...post,
+        ...(threadTs ? { thread_ts: threadTs } : {}),
+      }),
     });
     if (!res.ok) {
       console.warn("[ops/slack] webhook post failed", res.status, await res.text());
@@ -81,7 +95,12 @@ async function postViaWebhook(post: SlackPost): Promise<boolean> {
   }
 }
 
-type SlackApiResponse = { ok: boolean; error?: string; channel?: string };
+type SlackApiResponse = {
+  ok: boolean;
+  error?: string;
+  channel?: string;
+  ts?: string;
+};
 
 async function slackApi(
   method: string,
@@ -128,48 +147,81 @@ async function postViaBot(
   token: string,
   channel: string,
   post: SlackPost,
-): Promise<boolean> {
+  threadTs?: string,
+): Promise<SlackMessageRef | null> {
   try {
     const target = await resolveChannelForBot(token, channel);
     const resp = await slackApi("chat.postMessage", token, {
       channel: target,
       text: post.text,
       blocks: post.blocks,
+      ...(threadTs ? { thread_ts: threadTs } : {}),
     });
     if (!resp.ok) {
       console.warn("[ops/slack] chat.postMessage failed:", resp.error);
-      return false;
+      return null;
     }
-    return true;
+    return resp.channel && resp.ts
+      ? { channel: resp.channel, ts: resp.ts }
+      : null;
   } catch (err) {
     console.warn("[ops/slack] chat.postMessage error", err);
-    return false;
+    return null;
   }
+}
+
+type SlackSendResult =
+  | { ok: true; ref: SlackMessageRef | null }
+  | { ok: false; ref: null };
+
+async function sendSlack(
+  post: SlackPost,
+  options: SlackPostOptions = {},
+): Promise<SlackSendResult> {
+  const requestedChannel = options.channel?.trim() || undefined;
+  const botToken = getSlackBotToken();
+  const channel = requestedChannel ?? (botToken ? getSlackDefaultChannel() : undefined);
+  const threadTs = options.threadTs?.trim() || undefined;
+
+  // Bot posts return the channel and timestamp needed for thread replies.
+  if (channel && botToken) {
+    const ref = await postViaBot(botToken, channel, post, threadTs);
+    if (ref) return { ok: true, ref };
+    const fallbackPost = requestedChannel
+      ? withChannelNote(post, requestedChannel)
+      : post;
+    const ok = await postViaWebhook(fallbackPost, threadTs);
+    return ok ? { ok: true, ref: null } : { ok: false, ref: null };
+  }
+
+  // A channel was requested but we have no bot token: post to the single
+  // webhook channel and note where it was meant to go.
+  if (requestedChannel && !botToken) {
+    const ok = await postViaWebhook(
+      withChannelNote(post, requestedChannel),
+      threadTs,
+    );
+    return ok ? { ok: true, ref: null } : { ok: false, ref: null };
+  }
+
+  // No channel (global path): original single-channel webhook behavior.
+  const ok = await postViaWebhook(post, threadTs);
+  return ok ? { ok: true, ref: null } : { ok: false, ref: null };
 }
 
 export async function postSlack(
   post: SlackPost,
   options: SlackPostOptions = {},
 ): Promise<boolean> {
-  const channel = options.channel?.trim() || undefined;
-  const botToken = getSlackBotToken();
+  return (await sendSlack(post, options)).ok;
+}
 
-  // Preferred path: a specific channel routed via the bot token.
-  if (channel && botToken) {
-    const ok = await postViaBot(botToken, channel, post);
-    if (ok) return true;
-    // Bot post failed: degrade to the webhook so the beat is not lost.
-    return postViaWebhook(withChannelNote(post, channel));
-  }
-
-  // A channel was requested but we have no bot token: post to the single
-  // webhook channel and note where it was meant to go.
-  if (channel && !botToken) {
-    return postViaWebhook(withChannelNote(post, channel));
-  }
-
-  // No channel (global path): original single-channel webhook behavior.
-  return postViaWebhook(post);
+export async function postSlackWithRef(
+  post: SlackPost,
+  options: SlackPostOptions = {},
+): Promise<SlackMessageRef | null> {
+  const result = await sendSlack(post, options);
+  return result.ref;
 }
 
 // A terse detection ping, sent the moment an incident opens.
@@ -195,8 +247,21 @@ export function detectionBlocks(errorRate: number): SlackPost {
   };
 }
 
+export function cursorAgentUrl(agentId: string): string {
+  return `https://cursor.com/agents/${encodeURIComponent(agentId)}`;
+}
+
+function agentCredit(label: string, agentId?: string | null): string {
+  return agentId
+    ? `${label} · <${cursorAgentUrl(agentId)}|View investigation>`
+    : label;
+}
+
 // The exec-readable incident summary produced by the summarizer agent.
-export function summaryBlocks(summary: string): SlackPost {
+export function summaryBlocks(
+  summary: string,
+  agentId?: string | null,
+): SlackPost {
   return {
     text: summary,
     blocks: [
@@ -211,15 +276,25 @@ export function summaryBlocks(summary: string): SlackPost {
       {
         type: "context",
         elements: [
-          { type: "mrkdwn", text: "Drafted by a Cursor cloud agent" },
+          {
+            type: "mrkdwn",
+            text: agentCredit("Drafted by a Cursor cloud agent", agentId),
+          },
         ],
       },
     ],
   };
 }
 
-export function prBlocks(prUrl: string, prNumber: number): SlackPost {
-  const text = `:wrench: Fix PR opened for review by a Cursor cloud agent: <${prUrl}|booking-backend #${prNumber}>. Service is being mitigated by disabling the fuel-surcharge feature flag; the PR is the durable code fix.`;
+export function prBlocks(
+  prUrl: string,
+  prNumber: number,
+  agentId?: string | null,
+): SlackPost {
+  const investigation = agentId
+    ? ` <${cursorAgentUrl(agentId)}|View Cursor investigation>.`
+    : "";
+  const text = `:wrench: Fix PR opened for review by a Cursor cloud agent: <${prUrl}|booking-backend #${prNumber}>.${investigation} Service is being mitigated by disabling the fuel-surcharge feature flag; the PR is the durable code fix.`;
   return {
     text,
     blocks: [
@@ -263,7 +338,10 @@ export function spikeDetectedBlocks(): SlackPost {
 
 // The investigation conclusion for the transient scenario. The narrative beat:
 // an agent looked into it and concluded it is benign, nothing to fix.
-export function spikeInvestigationBlocks(assessment: string): SlackPost {
+export function spikeInvestigationBlocks(
+  assessment: string,
+  agentId?: string | null,
+): SlackPost {
   return {
     text: assessment,
     blocks: [
@@ -278,7 +356,10 @@ export function spikeInvestigationBlocks(assessment: string): SlackPost {
       {
         type: "context",
         elements: [
-          { type: "mrkdwn", text: "Assessed by a Cursor cloud agent" },
+          {
+            type: "mrkdwn",
+            text: agentCredit("Assessed by a Cursor cloud agent", agentId),
+          },
         ],
       },
     ],

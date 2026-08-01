@@ -84,6 +84,9 @@ PRs. See `src/lib/ops/labeling.ts` and `addDemoLabel` in `src/lib/ops/agents.ts`
   presenter's own Slack channel via a Slack bot token (`SLACK_BOT_TOKEN`), so a
   hundred simultaneous demos do not collide in one shared channel. Set a
   session's mode to "visual only" to break the site without opening an incident.
+  Agent summaries, fix PRs, and recovery updates reply inside the initial
+  incident thread. Agent-authored messages link directly to the Cursor
+  investigation.
 
 Runbook: `flylo-air/docs`, `demo-3am-outage.md`.
 
@@ -103,6 +106,7 @@ route inventory. Update them together when routes change.
 | `OPS_DASHBOARD_PASSWORD` | password gate for the `/ops` Ops Console (open locally when unset) |
 | `OPS_SHARED_SECRET` | bearer token for backend `/v1/_ops`, including demo-session management |
 | `SLACK_BOT_TOKEN` | optional Slack bot token (`chat:write`) for per-channel incident routing; falls back to `SLACK_WEBHOOK_URL` when unset |
+| `SLACK_DEFAULT_CHANNEL` | bot channel for incidents without a session-specific destination (default `incidents-ops`) |
 | `SLACK_AUTO_CREATE_CHANNEL` | optional; when `1`/`true` (needs bot `channels:manage`) the orchestrator may auto-create a named channel. Default off |
 | `DEMO_SESSION_TTL_MINUTES` | scoped demo outage self-heal TTL (default 20) |
 | `DEMO_SESSION_COOKIE_DOMAIN` | cookie domain for the demo session (default `.flylo-air.com`; only applied on flylo-air.com hosts) |

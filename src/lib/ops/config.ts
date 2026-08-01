@@ -41,6 +41,13 @@ export function getSlackBotToken(): string | undefined {
   return process.env.SLACK_BOT_TOKEN || undefined;
 }
 
+// Channel used when an incident does not request a presenter-specific channel.
+// Posting the root message through chat.postMessage gives us its timestamp, so
+// every later agent update can stay inside the same Slack thread.
+export function getSlackDefaultChannel(): string {
+  return process.env.SLACK_DEFAULT_CHANNEL || "incidents-ops";
+}
+
 // Optional: allow the orchestrator to auto-create a Slack channel (by name) via
 // conversations.create when a session asks for a channel that does not exist.
 // Needs the channels:manage scope on the bot token. Default OFF: even when a bot

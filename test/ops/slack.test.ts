@@ -22,13 +22,18 @@ function mockFetch(handler: (url: string) => { ok: boolean; json?: unknown }) {
   });
 }
 
-const { postSlack } = await import("@/lib/ops/slack");
+const {
+  postSlack,
+  postSlackWithRef,
+  summaryBlocks,
+} = await import("@/lib/ops/slack");
 
 beforeEach(() => {
   calls.length = 0;
   delete process.env.SLACK_BOT_TOKEN;
   delete process.env.SLACK_WEBHOOK_URL;
   delete process.env.SLACK_AUTO_CREATE_CHANNEL;
+  delete process.env.SLACK_DEFAULT_CHANNEL;
 });
 
 afterEach(() => {
@@ -38,7 +43,10 @@ afterEach(() => {
 describe("postSlack transport selection", () => {
   it("uses chat.postMessage with the channel when a bot token is set", async () => {
     process.env.SLACK_BOT_TOKEN = "xoxb-test";
-    mockFetch(() => ({ ok: true, json: { ok: true, channel: "C1" } }));
+    mockFetch(() => ({
+      ok: true,
+      json: { ok: true, channel: "C1", ts: "1712345678.000100" },
+    }));
 
     const ok = await postSlack({ text: "hi" }, { channel: "C0123ABCD" });
 
@@ -46,6 +54,46 @@ describe("postSlack transport selection", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0].url).toContain("chat.postMessage");
     expect(calls[0].body.channel).toBe("C0123ABCD");
+  });
+
+  it("returns the root message reference from the default incident channel", async () => {
+    process.env.SLACK_BOT_TOKEN = "xoxb-test";
+    process.env.SLACK_DEFAULT_CHANNEL = "incidents-ops";
+    mockFetch(() => ({
+      ok: true,
+      json: {
+        ok: true,
+        channel: "CINCIDENTS",
+        ts: "1712345678.000200",
+      },
+    }));
+
+    const ref = await postSlackWithRef({ text: "incident root" });
+
+    expect(calls[0].body.channel).toBe("incidents-ops");
+    expect(ref).toEqual({
+      channel: "CINCIDENTS",
+      ts: "1712345678.000200",
+    });
+  });
+
+  it("posts later updates into the root message thread", async () => {
+    process.env.SLACK_BOT_TOKEN = "xoxb-test";
+    mockFetch(() => ({
+      ok: true,
+      json: { ok: true, channel: "C1", ts: "1712345678.000300" },
+    }));
+
+    const ok = await postSlack(
+      { text: "agent summary" },
+      {
+        channel: "C1",
+        threadTs: "1712345678.000100",
+      },
+    );
+
+    expect(ok).toBe(true);
+    expect(calls[0].body.thread_ts).toBe("1712345678.000100");
   });
 
   it("falls back to the webhook and notes the intended channel when no bot token", async () => {
@@ -96,5 +144,16 @@ describe("postSlack transport selection", () => {
     expect(ok).toBe(false);
     // No webhook and no bot token: no network call.
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe("Cursor investigation links", () => {
+  it("links the agent from the incident summary", () => {
+    const post = summaryBlocks("summary", "bc-agent-123");
+
+    expect(JSON.stringify(post.blocks)).toContain(
+      "https://cursor.com/agents/bc-agent-123",
+    );
+    expect(JSON.stringify(post.blocks)).toContain("View investigation");
   });
 });

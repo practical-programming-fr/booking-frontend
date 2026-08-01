@@ -20,10 +20,15 @@ import { ensureDemoLabeled } from "./labeling";
 import {
   detectionBlocks,
   postSlack,
+  postSlackWithRef,
   prBlocks,
   recoveryBlocks,
   summaryBlocks,
 } from "./slack";
+import {
+  createSlackThreadEvent,
+  slackReplyOptions,
+} from "./slack-thread";
 import type { DemoSession, IncidentEvent, OpsIncident } from "./types";
 
 // Per-session ("scoped") incident arc.
@@ -147,7 +152,15 @@ async function progressSession(
         { demoSessionId: session.id, channel: channel ?? null },
       ),
     });
-    await postSlack(detectionBlocks(count), { channel });
+    const slackRoot = await postSlackWithRef(detectionBlocks(count), {
+      channel,
+    });
+    if (slackRoot) {
+      incident = await appendIncidentEvent(
+        incident.id,
+        createSlackThreadEvent(slackRoot),
+      );
+    }
   }
 
   // Only an open incident needs its agents / summary / PR driven forward.
@@ -194,7 +207,10 @@ async function progressSession(
     }
   } else if (!incident.summaryPosted) {
     // Degraded local mode: no agents, still show the summary beat per session.
-    await postSlack(summaryBlocks(SIMULATED_SUMMARY), { channel });
+    await postSlack(
+      summaryBlocks(SIMULATED_SUMMARY),
+      slackReplyOptions(incident, channel),
+    );
     incident = await patchIncident(incident.id, { summaryPosted: true });
     await appendIncidentEvent(
       incident.id,
@@ -206,7 +222,10 @@ async function progressSession(
   if (incident.summarizerAgentId && !incident.summaryPosted) {
     const status = await getAgentStatus(incident.summarizerAgentId);
     if (status.status === "finished" && status.finalText) {
-      await postSlack(summaryBlocks(status.finalText), { channel });
+      await postSlack(
+        summaryBlocks(status.finalText, incident.summarizerAgentId),
+        slackReplyOptions(incident, channel),
+      );
       incident = await patchIncident(incident.id, { summaryPosted: true });
       await appendIncidentEvent(
         incident.id,
@@ -224,7 +243,14 @@ async function progressSession(
         prNumber: status.prNumber,
         prPosted: true,
       });
-      await postSlack(prBlocks(status.prUrl, status.prNumber ?? 0), { channel });
+      await postSlack(
+        prBlocks(
+          status.prUrl,
+          status.prNumber ?? 0,
+          incident.fixerAgentId,
+        ),
+        slackReplyOptions(incident, channel),
+      );
       await appendIncidentEvent(
         incident.id,
         ev("pr_opened", `Fix PR opened for review: ${status.prUrl}`, {
@@ -250,7 +276,10 @@ async function recoverSession(incident: OpsIncident): Promise<void> {
     incident.id,
     ev("recovered", "Scoped demo outage cleared. Session resolved."),
   );
-  await postSlack(recoveryBlocks(), { channel });
+  await postSlack(
+    recoveryBlocks(),
+    slackReplyOptions(incident, channel),
+  );
 }
 
 function errMsg(err: unknown): string {

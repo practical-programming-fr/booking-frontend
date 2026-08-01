@@ -13,7 +13,11 @@ const h = vi.hoisted(() => {
       prUrl: null as string | null,
       prNumber: null as number | null,
     },
-    slackPosts: [] as { text: string; channel?: string | null }[],
+    slackPosts: [] as {
+      text: string;
+      channel?: string | null;
+      threadTs?: string | null;
+    }[],
     launches: { summarizer: 0, fixer: 0 },
     labels: [] as number[],
     seq: 1,
@@ -92,9 +96,30 @@ vi.mock("@/lib/ops/slack", () => {
     return { text };
   };
   return {
-    postSlack: async (post: { text: string }, opts?: { channel?: string | null }) => {
-      h.store.slackPosts.push({ text: post.text, channel: opts?.channel ?? null });
+    postSlack: async (
+      post: { text: string },
+      opts?: { channel?: string | null; threadTs?: string | null },
+    ) => {
+      h.store.slackPosts.push({
+        text: post.text,
+        channel: opts?.channel ?? null,
+        threadTs: opts?.threadTs ?? null,
+      });
       return true;
+    },
+    postSlackWithRef: async (
+      post: { text: string },
+      opts?: { channel?: string | null },
+    ) => {
+      h.store.slackPosts.push({
+        text: post.text,
+        channel: opts?.channel ?? null,
+        threadTs: null,
+      });
+      return {
+        channel: opts?.channel ?? "incidents-ops",
+        ts: "1712345678.000100",
+      };
     },
     detectionBlocks: () => ({ text: "detection" }),
     summaryBlocks: (t: string) => ({ text: `summary:${t.slice(0, 12)}` }),
@@ -194,6 +219,11 @@ describe("per-session scoped outage arc", () => {
     expect(h.store.labels).toContain(42);
     // Everything routed to the session channel.
     expect(h.store.slackPosts.every((p) => p.channel === "C0999")).toBe(true);
+    expect(
+      h.store.slackPosts
+        .filter((p) => p.text !== "detection")
+        .every((p) => p.threadTs === "1712345678.000100"),
+    ).toBe(true);
     // Still one incident for the session (no loop).
     expect(h.store.incidents).toHaveLength(1);
   });
