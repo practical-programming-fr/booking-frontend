@@ -372,6 +372,21 @@ export const bookingApi = {
       init,
     ),
 
+  activateDemoOutage: async (
+    token: string,
+    sessionId: string,
+  ): Promise<{
+    ok: true;
+    demoSessionId: string;
+    bookingSessionId: string;
+    expiresAt: string;
+  }> =>
+    request("/v1/demo/activate", {
+      method: "POST",
+      body: JSON.stringify({ token }),
+      sessionId,
+    }),
+
   // --- Booking writes --------------------------------------------------
 
   createBooking: async (

@@ -12,8 +12,9 @@ HTTP.
 - No UI kit, no animation libraries, no state library
 - A small typed API client in `src/lib/api.ts` wraps `fetch` calls to
   `booking-backend`
-- A browser session UUID (in `localStorage`) is sent on every API
-  request via `x-booking-session` so bookings persist without auth
+- A browser session UUID mirrored between a first-party cookie and
+  `localStorage` is sent via `x-booking-session` so bookings persist without
+  auth and scoped demos survive normal navigation
 
 ## Design system
 
@@ -46,6 +47,7 @@ Verbatim port of `flylo-air/web`:
 | `/book/[pnr]/confirmation` | Boarding-pass-style confirmation |
 | `/trips` | List trips owned by this browser session + PNR + email lookup |
 | `/trips/[pnr]` | Trip detail |
+| `/demo/activate` | Bind a one-time MCP outage token to this browser session, then redirect to `/` |
 | `/legal/privacy`, `/legal/terms` | Reused from marketing site |
 
 ## Build order

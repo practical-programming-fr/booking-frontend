@@ -6,7 +6,18 @@
 
 const STORAGE_KEY = "flylo:booking:session";
 const COOKIE_KEY = "flylo_booking_session";
-const COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 365;
+export const SESSION_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 365;
+
+export function isBookingSessionId(
+  value: string | null | undefined,
+): value is string {
+  return Boolean(
+    value &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        value,
+      ),
+  );
+}
 
 function generateUuid(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -37,7 +48,7 @@ function setSessionCookie(id: string): void {
   if (typeof document === "undefined") return;
   const isSecure = typeof window !== "undefined" && window.location.protocol === "https:";
   document.cookie =
-    `${COOKIE_KEY}=${id}; path=/; max-age=${COOKIE_MAX_AGE_SECONDS}; samesite=lax` +
+    `${COOKIE_KEY}=${id}; path=/; max-age=${SESSION_COOKIE_MAX_AGE_SECONDS}; samesite=lax` +
     (isSecure ? "; secure" : "");
 }
 
@@ -56,9 +67,14 @@ export function getOrCreateSessionId(): string {
   if (typeof window === "undefined") {
     return "";
   }
-  let id =
-    window.localStorage.getItem(STORAGE_KEY) ?? readSessionCookie() ?? null;
-  if (!id) {
+  const cookieId = readSessionCookie();
+  const storedId = window.localStorage.getItem(STORAGE_KEY);
+  let id = isBookingSessionId(cookieId)
+    ? cookieId
+    : isBookingSessionId(storedId)
+      ? storedId
+      : null;
+  if (id === null) {
     id = generateUuid();
   }
   window.localStorage.setItem(STORAGE_KEY, id);
@@ -72,7 +88,8 @@ export async function getSessionIdForServer(): Promise<string> {
   try {
     const { cookies } = await import("next/headers");
     const store = await cookies();
-    return store.get(COOKIE_KEY)?.value ?? "";
+    const id = store.get(COOKIE_KEY)?.value;
+    return isBookingSessionId(id) ? id : "";
   } catch {
     return "";
   }

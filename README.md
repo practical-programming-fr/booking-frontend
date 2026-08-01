@@ -14,8 +14,8 @@ See [`SPEC.md`](./SPEC.md) for the route inventory and the build plan.
 - **next/font** — Instrument Serif + Geist + Geist Mono
 - No UI kit, no animation library, no state library
 - A tiny typed API client in `src/lib/api.ts` wraps the booking-backend
-- A browser session UUID kept in `localStorage` so bookings persist
-  without authentication
+- A browser session UUID mirrored between a first-party cookie and
+  `localStorage` so bookings persist without authentication
 
 ## Quick start
 
@@ -43,6 +43,7 @@ backend. If the backend isn't reachable, the page renders a graceful
 | `/trips` | List trips for this browser session + PNR/email lookup | Implemented |
 | `/trips/[pnr]` | Trip detail + online check-in entry point | Implemented |
 | `/help` | Static contact + about | Implemented |
+| `/demo/activate` | One-time MCP outage activation bound to this browser session | Implemented |
 
 `/ops` is an internal, employee-facing Ops Console (password gated by
 `OPS_DASHBOARD_PASSWORD`). It runs a per-session ("scoped") demo outage: a
@@ -51,6 +52,13 @@ presenter clicks "Trigger outage" and only their own browser starts getting
 by activating a demo session on the backend, setting the `flylo_demo_session`
 cookie, and forwarding it as the `x-demo-session` header on every booking API
 call (see `src/lib/demo-session.ts` and `src/lib/api.ts`).
+
+The MCP path is separate from the Ops Console cookie. `start_demo_outage`
+returns a one-time `/demo/activate?token=...` link. Opening it binds the active
+backend demo session to this browser's normal `flylo_booking_session` cookie,
+then redirects to `/`. Search, flight selection, and checkout keep failing for
+that browser as it navigates normally. Other visitors remain healthy. The
+outage ends through `clear_demo_outage`, the Ops reset, or its TTL.
 
 The orchestrator runs headless: `/api/ops/tick` (invoked by Vercel Cron, see
 `vercel.json`) monitors the backend, launches the summarizer/fixer Cursor cloud
