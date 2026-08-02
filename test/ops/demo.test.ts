@@ -36,7 +36,8 @@ const h = vi.hoisted(() => {
 });
 
 vi.mock("@/lib/ops/backend", () => {
-  const kindOf = (i: OpsIncident) => i.kind ?? "outage";
+  const kindOf = (i: OpsIncident) =>
+    i.kind == null || i.kind === "outage" ? "outage" : null;
   return {
     incidentKind: kindOf,
     listDemoSessions: async (): Promise<DemoSession[]> => [...h.store.sessions],
@@ -48,7 +49,7 @@ vi.mock("@/lib/ops/backend", () => {
     fetchErrorCount: async () => 0,
     createIncident: async (input: {
       title?: string;
-      kind?: "outage" | "spike";
+      kind?: "outage";
       event: { at: string; kind: string; message: string; data?: Record<string, unknown> };
     }): Promise<OpsIncident> => {
       const now = new Date().toISOString();
@@ -125,10 +126,6 @@ vi.mock("@/lib/ops/slack", () => {
     summaryBlocks: (t: string) => ({ text: `summary:${t.slice(0, 12)}` }),
     prBlocks: (url: string) => ({ text: `pr:${url}` }),
     recoveryBlocks: () => ({ text: "recovery" }),
-    // unused here but exported for import parity
-    spikeDetectedBlocks: push("spike_detected"),
-    spikeInvestigationBlocks: push("spike_investigation"),
-    spikeRecoveredBlocks: push("spike_recovered"),
   };
 });
 
