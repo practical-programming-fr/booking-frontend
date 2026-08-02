@@ -77,8 +77,8 @@ unique marker (`<!-- flylo-outage-demo-fix -->`) in the PR body so cleanup can
 match these PRs even if a label somehow never lands, without touching unrelated
 PRs. See `src/lib/ops/labeling.ts` and `addDemoLabel` in `src/lib/ops/agents.ts`.
 
-- The GLOBAL outage/spike scenarios, keyed off the seeded feature flags (flipped
-  by a separate internal admin app via booking-backend `/v1/_ops`), unchanged.
+- The GLOBAL outage scenario, keyed off `fare_adjustment_v2` (operator recovery
+  via booking-backend `/v1/_ops` only; presenters cannot enable it from this app).
 - The PER-SESSION scoped outages: each active demo session runs its own
   independent incident arc (detect, Slack, agents, PR, recovery) routed to that
   presenter's own Slack channel via a Slack bot token (`SLACK_BOT_TOKEN`), so a
