@@ -8,6 +8,13 @@ import {
 
 export const dynamic = "force-dynamic";
 
+function safeReturnPath(value: string | null): string {
+  if (!value || !value.startsWith("/") || value.startsWith("//")) {
+    return "/";
+  }
+  return value;
+}
+
 function errorPage(message: string, status: number): Response {
   return new Response(
     `<!doctype html>
@@ -50,16 +57,17 @@ export async function GET(request: NextRequest): Promise<Response> {
     if (error instanceof ApiError) {
       const message =
         error.status === 410
-          ? "This activation link expired. Ask Cursor to start a new scoped outage."
+          ? "This activation link expired. Ask Cursor to prepare or trigger a new scoped outage."
           : error.status === 409
-            ? "This activation link was already used. Ask Cursor to start a new scoped outage."
+            ? "This activation link was already used. Ask Cursor to prepare or trigger a new scoped outage."
             : "The booking service could not activate this scoped outage.";
       return errorPage(message, error.status);
     }
     return errorPage("The booking service could not activate this scoped outage.", 500);
   }
 
-  const response = NextResponse.redirect(new URL("/", request.url), 303);
+  const returnPath = safeReturnPath(request.nextUrl.searchParams.get("return"));
+  const response = NextResponse.redirect(new URL(returnPath, request.url), 303);
   response.cookies.set({
     name: SESSION_COOKIE_NAME,
     value: bookingSessionId,

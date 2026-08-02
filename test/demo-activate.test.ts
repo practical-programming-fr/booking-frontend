@@ -59,6 +59,35 @@ describe("demo activation link", () => {
     );
   });
 
+  it("redirects to a same-origin return path after bind", async () => {
+    const returnPath = "/search?from=LHR&to=HND&date=2026-08-15";
+    const request = new NextRequest(
+      `https://book.flylo-air.com/demo/activate?token=one-time-token-value-that-is-long-enough&return=${encodeURIComponent(returnPath)}`,
+      { headers: { Cookie: `flylo_booking_session=${sessionId}` } },
+    );
+
+    const response = await GET(request);
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe(
+      `https://book.flylo-air.com${returnPath}`,
+    );
+  });
+
+  it("rejects open-redirect return values and falls back to /", async () => {
+    for (const unsafe of ["//evil.example", "https://evil.example/phish", "search"]) {
+      const request = new NextRequest(
+        `https://book.flylo-air.com/demo/activate?token=one-time-token-value-that-is-long-enough&return=${encodeURIComponent(unsafe)}`,
+        { headers: { Cookie: `flylo_booking_session=${sessionId}` } },
+      );
+
+      const response = await GET(request);
+
+      expect(response.status).toBe(303);
+      expect(response.headers.get("location")).toBe("https://book.flylo-air.com/");
+    }
+  });
+
   it("creates a booking session for a fresh browser profile", async () => {
     const request = new NextRequest(
       "https://book.flylo-air.com/demo/activate?token=one-time-token-value-that-is-long-enough",
@@ -87,7 +116,9 @@ describe("demo activation link", () => {
     const response = await GET(request);
 
     expect(response.status).toBe(410);
-    await expect(response.text()).resolves.toContain("activation link expired");
+    const body = await response.text();
+    expect(body).toContain("activation link expired");
+    expect(body).toContain("prepare or trigger");
   });
 
   it("shows an already-used error instead of redirecting", async () => {
@@ -102,6 +133,8 @@ describe("demo activation link", () => {
     const response = await GET(request);
 
     expect(response.status).toBe(409);
-    await expect(response.text()).resolves.toContain("already used");
+    const body = await response.text();
+    expect(body).toContain("already used");
+    expect(body).toContain("prepare or trigger");
   });
 });
