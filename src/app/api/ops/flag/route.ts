@@ -33,6 +33,17 @@ export async function POST(req: Request): Promise<Response> {
   if (typeof body.enabled !== "boolean") {
     return NextResponse.json({ error: "enabled must be a boolean" }, { status: 400 });
   }
+  // Presenters must not flip the global outage on. Scoped demos use
+  // /api/ops/demo/trigger. Recovery (disable) stays available.
+  if (body.enabled === true && key === FARE_ADJUSTMENT_FLAG) {
+    return NextResponse.json(
+      {
+        error:
+          "Enabling the global outage flag is disabled. Use a scoped demo session.",
+      },
+      { status: 400 },
+    );
+  }
   try {
     await setFlag(key, body.enabled, resolveActor(req, body.actor));
     const snapshot = await buildSnapshot();

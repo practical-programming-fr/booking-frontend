@@ -5,11 +5,9 @@ import {
   INCIDENT_ERROR_THRESHOLD,
   INCIDENT_WINDOW_SECONDS,
   RECOVERY_GREEN_TICKS,
-  SPIKE_FLAG,
   getIncidentRedetectCooldownSeconds,
   getMaxIncidentsPerHour,
   getOutageTtlMinutes,
-  getSpikeTtlSeconds,
 } from "./config";
 import {
   appendIncidentEvent,
@@ -18,7 +16,6 @@ import {
   fetchErrors,
   fetchFlags,
   fetchIncidents,
-  fetchOpenIncidentByKind,
   incidentKind,
   patchIncident,
   setFlag,
@@ -28,7 +25,6 @@ import {
   agentsAvailable,
   getAgentStatus,
   launchFixer,
-  launchInvestigator,
   launchSummarizer,
 } from "./agents";
 import { ensureDemoLabeled } from "./labeling";
@@ -38,9 +34,6 @@ import {
   postSlack,
   postSlackWithRef,
   recoveryBlocks,
-  spikeDetectedBlocks,
-  spikeInvestigationBlocks,
-  spikeRecoveredBlocks,
   summaryBlocks,
 } from "./slack";
 import {
@@ -67,17 +60,11 @@ export async function buildSnapshot(): Promise<OpsSnapshot> {
     runProbes(),
     fetchErrors(30),
     fetchErrorCount(INCIDENT_WINDOW_SECONDS),
-    // Scan a window of recent incidents so we can resolve the open incident of
-    // each kind independently (an outage and a transient can both be open).
     fetchIncidents(20),
   ]);
   return snapshotShape(flags, probes, errors, count5xx, recent);
 }
 
-// Build the OpsSnapshot fields shared by buildSnapshot and runTick. Surfaces
-// both scenarios: outageEnabled/spikeEnabled from the flags, and the open
-// incident of each kind derived from the recent list (falling back to the most
-// recent incident so a just-resolved timeline stays visible).
 function snapshotShape(
   flags: OpsFlag[],
   probes: OpsSnapshot["probes"],
@@ -86,7 +73,6 @@ function snapshotShape(
   recent: OpsIncident[],
 ): OpsSnapshot {
   const outage = flags.find((f) => f.key === FARE_ADJUSTMENT_FLAG);
-  const spike = flags.find((f) => f.key === SPIKE_FLAG);
   // The global snapshot ignores per-session ("scoped") demo incidents so they
   // never clobber the global view; those are surfaced to presenters via the
   // /api/ops/demo/status route instead.
@@ -94,26 +80,69 @@ function snapshotShape(
     incidentKind(i) === "outage" && !isSessionScopedIncident(i);
   const openOutage =
     recent.find((i) => i.status === "open" && globalOutage(i)) ?? null;
-  const openSpike =
-    recent.find((i) => i.status === "open" && incidentKind(i) === "spike") ?? null;
   const recentGlobal = recent.filter((i) => !isSessionScopedIncident(i));
   return {
     now: new Date().toISOString(),
     outageEnabled: outage?.enabled ?? false,
-    spikeEnabled: spike?.enabled ?? false,
     flags,
     probes,
     errors,
     errorRate5xx: count5xx,
-    // Prefer the open outage, then the open transient, then the most recent
-    // incident (so the resolved/recovered state stays on the timeline).
-    incident: openOutage ?? openSpike ?? recentGlobal[0] ?? null,
-    spikeIncident: openSpike,
+    incident: openOutage ?? recentGlobal[0] ?? null,
     agentsAvailable: agentsAvailable(),
   };
 }
 
 export type TickOptions = { force?: boolean };
+
+// Detection decision for the outage path. Collapses the flag/probe/cooldown/cap
+// boolean soup into one discriminant the detect block can switch on.
+export type OpsTickDecision =
+  | { type: "healthy" }
+  | { type: "progress"; incident: OpsIncident }
+  | { type: "detect"; reason: "force" | "active" | "error_threshold" }
+  | { type: "suppressed"; reason: "cooldown" | "cap"; openedLastHour?: number };
+
+function decideOutageTick(input: {
+  incident: OpsIncident | null;
+  force: boolean;
+  outageActiveNow: boolean;
+  count5xx: number;
+  inCooldown: boolean;
+  capReached: boolean;
+  openedLastHour: number;
+}): OpsTickDecision {
+  if (input.incident) {
+    return { type: "progress", incident: input.incident };
+  }
+
+  const signal: OpsTickDecision | null = input.force
+    ? { type: "detect", reason: "force" }
+    : input.outageActiveNow
+      ? { type: "detect", reason: "active" }
+      : input.count5xx >= INCIDENT_ERROR_THRESHOLD
+        ? { type: "detect", reason: "error_threshold" }
+        : null;
+
+  if (!signal) return { type: "healthy" };
+
+  // Cap always wins once reached.
+  if (input.capReached) {
+    return {
+      type: "suppressed",
+      reason: "cap",
+      openedLastHour: input.openedLastHour,
+    };
+  }
+
+  // Cooldown only suppresses residual trailing-5xx detection (error_threshold).
+  // force / active outages still open.
+  if (input.inCooldown && signal.reason === "error_threshold") {
+    return { type: "suppressed", reason: "cooldown" };
+  }
+
+  return signal;
+}
 
 // One step of the incident state machine. Idempotent and safe to call
 // frequently (Vercel cron ~60s hits it, and callers may invoke it directly).
@@ -122,12 +151,8 @@ export async function runTick(options: TickOptions = {}): Promise<OpsSnapshot> {
   let flags = await fetchFlags();
   const probes = await runProbes();
 
-  // Both scenarios are handled in isolation below. Each block is wrapped so a
-  // failure in one (backend, Slack, or agent call) degrades gracefully and can
-  // never throw out of the tick or crash the /api/ops/tick route. The tick
-  // always returns a snapshot.
-
-  // --- OUTAGE: real bug, keyed off the fare flag + 5xx/probes -------------
+  // Each block is wrapped so a failure (backend, Slack, or agent call) degrades
+  // gracefully and can never throw out of the tick or crash /api/ops/tick.
   let count5xx = 0;
   try {
     count5xx = await fetchErrorCount(INCIDENT_WINDOW_SECONDS);
@@ -140,24 +165,14 @@ export async function runTick(options: TickOptions = {}): Promise<OpsSnapshot> {
     console.warn("[ops/tick] outage handling failed:", errMsg(err));
   }
 
-  // --- TRANSIENT: benign degraded performance, keyed off the spike flag ----
-  try {
-    flags = await runSpikeTick(flags);
-  } catch (err) {
-    console.warn("[ops/tick] transient handling failed:", errMsg(err));
-  }
-
-  // --- PER-SESSION: scoped demo outages, one independent arc per session ---
-  // Additive: does nothing when there are no active demo sessions (or when the
-  // backend/secret is not configured). Never touches the global incident.
+  // Per-session scoped demo outages. Additive: no-op when there are no active
+  // demo sessions. Never touches the global incident.
   try {
     await runDemoSessionsTick();
   } catch (err) {
     console.warn("[ops/tick] demo session handling failed:", errMsg(err));
   }
 
-  // Read incidents fresh so the returned snapshot reflects every event appended
-  // during this tick (local copies can lag append-only writes).
   let recent: OpsIncident[] = [];
   try {
     recent = await fetchIncidents(20);
@@ -173,11 +188,6 @@ export async function runTick(options: TickOptions = {}): Promise<OpsSnapshot> {
   return snapshotShape(flags, probes, errors, count5xx, recent);
 }
 
-// The outage state machine (unchanged in observable behavior): auto-expiry,
-// detect on 5xx/probes, launch summarizer + fixer, post to Slack, recover after
-// N green ticks. Keyed only off the outage flag and 5xx/probes, and it only
-// ever touches the open incident of kind "outage". Returns the (possibly
-// refreshed) flags so the caller keeps an accurate view after auto-expiry.
 async function runOutageTick(
   flags: OpsFlag[],
   probes: OpsSnapshot["probes"],
@@ -187,8 +197,7 @@ async function runOutageTick(
   const healthy = probesHealthy(probes);
 
   // Auto-expiry safety net: if the outage flag has been on longer than the TTL,
-  // flip it back off so a forgotten demo self-heals. Done before reading the
-  // incident so the same tick observes the recovered state.
+  // flip it back off so a forgotten demo self-heals.
   const ttl = getOutageTtlMinutes();
   const outageFlag = flags.find((f) => f.key === FARE_ADJUSTMENT_FLAG);
   let autoExpired = false;
@@ -201,11 +210,9 @@ async function runOutageTick(
     }
   }
 
-  // Read a window of recent incidents once: it gives us the open outage plus
-  // the state needed for the post-recovery cooldown and the per-hour cap.
-  // Per-session ("scoped") demo incidents are filtered out here so the global
-  // path never picks one up, and so scoped incidents do not consume the global
-  // cooldown or per-hour cap. The scoped arc runs independently in demo.ts.
+  // Per-session demo incidents are filtered out so the global path never picks
+  // one up, and so scoped incidents do not consume the global cooldown or
+  // per-hour cap. The scoped arc runs independently in demo.ts.
   const recent = (await fetchIncidents(50)).filter(
     (i) => !isSessionScopedIncident(i),
   );
@@ -219,69 +226,65 @@ async function runOutageTick(
     );
   }
 
-  // Is the outage actually happening right now? The outage is deterministically
-  // controlled by the fare flag (and by genuinely unhealthy probes), so this,
-  // not a trailing 5xx count, is the real detection signal. Stale 5xx still
-  // inside the trailing window must not keep re-tripping detection once the flag
-  // is off and the site is healthy again.
-  // Read the enabled state from the (possibly auto-expiry refreshed) flags, not
-  // the pre-expiry snapshot, so an expired flag reads as off here.
   const outageEnabledNow =
     flags.find((f) => f.key === FARE_ADJUSTMENT_FLAG)?.enabled ?? false;
   const outageActiveNow =
     outageEnabledNow || (!healthy && !probesAreOnlyTimeouts(probes));
 
-  // Post-recovery cooldown: after an outage incident resolves, do not open a new
-  // one for a while unless the outage is observed again by the flag/probe test.
-  // This blocks trailing-window and flap re-triggering (the 163-incident loop).
   const cooldownSeconds = getIncidentRedetectCooldownSeconds();
   const sinceResolvedSeconds = lastResolvedOutageAgeSeconds(recent);
   const inCooldown = sinceResolvedSeconds < cooldownSeconds;
 
-  // Hard safety cap: never open more than N outage incidents per trailing hour.
   const openedLastHour = outageIncidentsInLastHour(recent);
   const capReached = openedLastHour >= getMaxIncidentsPerHour();
 
-  // Detection wants to fire on a live outage (flag/probe) or, as a residual
-  // path, on genuinely elevated trailing 5xx above the threshold. The count
-  // alone can only fire outside the cooldown, so it can never resurrect a just
-  // resolved incident from errors still aging out of the window.
-  const wantsDetect =
-    options.force || outageActiveNow || count5xx >= INCIDENT_ERROR_THRESHOLD;
+  const decision = decideOutageTick({
+    incident,
+    force: Boolean(options.force),
+    outageActiveNow,
+    count5xx,
+    inCooldown,
+    capReached,
+    openedLastHour,
+  });
 
-  // Cooldown only suppresses re-detection when the outage is NOT active now: a
-  // genuinely new outage (flag flipped back on / probes unhealthy) still opens.
-  const cooldownBlocks = inCooldown && !outageActiveNow && !options.force;
-
-  const shouldDetect = !incident && wantsDetect && !cooldownBlocks && !capReached;
-
-  // --- Detect --------------------------------------------------------------
-  if (shouldDetect) {
-    incident = await createIncident({
-      kind: "outage",
-      title: "Booking API 5xx on pricing path",
-      event: ev("detected", `Elevated 5xx on the booking pricing path (${count5xx} in ${INCIDENT_WINDOW_SECONDS}s).`),
-    });
-    const slackRoot = await postSlackWithRef(detectionBlocks(count5xx));
-    if (slackRoot) {
-      incident = await appendIncidentEvent(
-        incident.id,
-        createSlackThreadEvent(slackRoot),
-      );
+  switch (decision.type) {
+    case "detect": {
+      incident = await createIncident({
+        kind: "outage",
+        title: "Booking API 5xx on pricing path",
+        event: ev(
+          "detected",
+          `Elevated 5xx on the booking pricing path (${count5xx} in ${INCIDENT_WINDOW_SECONDS}s).`,
+        ),
+      });
+      const slackRoot = await postSlackWithRef(detectionBlocks(count5xx));
+      if (slackRoot) {
+        incident = await appendIncidentEvent(
+          incident.id,
+          createSlackThreadEvent(slackRoot),
+        );
+      }
+      break;
     }
-  } else if (!incident && wantsDetect && capReached) {
-    // Detection would have fired but the per-hour cap tripped. Skip loudly so
-    // the safety limit is visible in logs without creating another incident.
-    console.warn(
-      `[ops/tick] outage detection suppressed: ${openedLastHour} incidents already opened in the last hour (cap ${getMaxIncidentsPerHour()}).`,
-    );
+    case "suppressed": {
+      if (decision.reason === "cap") {
+        console.warn(
+          `[ops/tick] outage detection suppressed: ${decision.openedLastHour} incidents already opened in the last hour (cap ${getMaxIncidentsPerHour()}).`,
+        );
+      }
+      break;
+    }
+    case "progress":
+      incident = decision.incident;
+      break;
+    case "healthy":
+      break;
   }
 
-  // --- Progress an open incident ------------------------------------------
   if (incident) {
     const errors = await fetchErrors(8);
 
-    // Launch agents once.
     if (agentsAvailable()) {
       if (!incident.summarizerAgentId) {
         try {
@@ -302,7 +305,6 @@ async function runOutageTick(
         }
       }
     } else if (!incident.summaryPosted) {
-      // Degraded local mode: no agents, still show the summary beat.
       await postSlack(
         summaryBlocks(SIMULATED_SUMMARY),
         slackReplyOptions(incident),
@@ -311,7 +313,6 @@ async function runOutageTick(
       await appendIncidentEvent(incident.id, ev("summary_posted", "Incident summary posted to Slack (simulated; no CURSOR_API_KEY)."));
     }
 
-    // Summarizer finished -> post summary to Slack.
     if (incident.summarizerAgentId && !incident.summaryPosted) {
       const status = await getAgentStatus(incident.summarizerAgentId);
       if (status.status === "finished" && status.finalText) {
@@ -324,8 +325,6 @@ async function runOutageTick(
       }
     }
 
-    // Fixer opened a PR -> post the link to Slack. The PR is the review
-    // artifact; it is never merged (the demo recovers via the flag).
     if (incident.fixerAgentId && !incident.prPosted) {
       const status = await getAgentStatus(incident.fixerAgentId);
       if (status.prUrl) {
@@ -346,13 +345,8 @@ async function runOutageTick(
       }
     }
 
-    // Label the PR `demo` so the nightly demo-cleanup can find and close it.
-    // Kept separate from the Slack post above (which fires once) and retried on
-    // every tick until it succeeds, because the label is cleanup's only signal.
-    // Labelling failures are recorded loudly on the timeline, never swallowed.
     incident = await ensureDemoLabeled(incident);
 
-    // --- Recover -----------------------------------------------------------
     if (healthy) {
       const next = incident.greenTicks + 1;
       if (next >= RECOVERY_GREEN_TICKS) {
@@ -375,122 +369,6 @@ async function runOutageTick(
   return flags;
 }
 
-// Canned investigation conclusion used when no agents are available (local dev)
-// or as a fallback so the "investigated, benign" beat always shows and the
-// transient always self-heals on the TTL even if an agent is slow.
-const SIMULATED_INVESTIGATION =
-  "*What we saw:* Booking API responses were briefly slower than usual.\n" +
-  "*Assessment:* A short traffic burst; latency recovered on its own. No error rate increase and no failing requests.\n" +
-  "*Recommendation:* No action needed; monitoring.";
-
-// The transient / degraded-performance state machine (benign, self-healing).
-// Keyed ONLY off the spike flag and its TTL. It never reads probes or 5xx, so
-// the booking site stays healthy throughout. It launches at most one
-// investigator agent, never a fixer, and never opens a PR. The narrative beat
-// is an explicit "investigated and concluded it is a non-issue" conclusion.
-async function runSpikeTick(flags: OpsFlag[]): Promise<OpsFlag[]> {
-  const spikeFlag = flags.find((f) => f.key === SPIKE_FLAG);
-  const spikeEnabled = spikeFlag?.enabled ?? false;
-  let incident = await fetchOpenIncidentByKind("spike");
-
-  // --- Detect --------------------------------------------------------------
-  if (spikeEnabled && !incident) {
-    incident = await createIncident({
-      kind: "spike",
-      title: "Degraded performance on booking API",
-      event: ev("detected", "Elevated latency on the booking API. Site is up; investigating."),
-    });
-    const slackRoot = await postSlackWithRef(spikeDetectedBlocks());
-    if (slackRoot) {
-      incident = await appendIncidentEvent(
-        incident.id,
-        createSlackThreadEvent(slackRoot),
-      );
-    }
-  }
-
-  if (!incident) return flags;
-
-  const ttlSeconds = getSpikeTtlSeconds();
-  const ageSec = spikeFlag
-    ? (Date.now() - new Date(spikeFlag.updatedAt).getTime()) / 1000
-    : Number.POSITIVE_INFINITY;
-  const ttlElapsed = ageSec >= ttlSeconds;
-  const flagOff = !spikeEnabled;
-
-  // --- Investigate: launch a single investigator agent (never a fixer) -----
-  if (agentsAvailable() && !incident.summarizerAgentId && !incident.summaryPosted) {
-    try {
-      const errors = await fetchErrors(8);
-      const id = await launchInvestigator(errors);
-      incident = await patchIncident(incident.id, { summarizerAgentId: id });
-      await appendIncidentEvent(
-        incident.id,
-        ev("investigator_launched", "Investigator cloud agent launched to assess the latency."),
-      );
-    } catch (err) {
-      await appendIncidentEvent(incident.id, ev("agent_error", `Investigator launch failed: ${errMsg(err)}`));
-    }
-  }
-
-  // --- Post the investigation conclusion (the key "non-issue" beat) --------
-  if (!incident.summaryPosted) {
-    let conclusion: string | null = null;
-    if (incident.summarizerAgentId) {
-      try {
-        const status = await getAgentStatus(incident.summarizerAgentId);
-        if (status.status === "finished" && status.finalText) {
-          conclusion = status.finalText;
-        }
-      } catch (err) {
-        console.warn("[ops/tick] investigator status failed:", errMsg(err));
-      }
-    }
-    // Fall back to a canned conclusion when there is no agent, or when the flag
-    // is off / TTL elapsed and the agent has not concluded yet, so the beat
-    // always shows and the transient still self-heals.
-    if (!conclusion && (!agentsAvailable() || !incident.summarizerAgentId || ttlElapsed || flagOff)) {
-      conclusion = SIMULATED_INVESTIGATION;
-    }
-    if (conclusion) {
-      await postSlack(
-        spikeInvestigationBlocks(conclusion, incident.summarizerAgentId),
-        slackReplyOptions(incident),
-      );
-      incident = await patchIncident(incident.id, { summaryPosted: true });
-      await appendIncidentEvent(
-        incident.id,
-        ev("investigation_posted", "Investigation concluded: transient degradation, no code change needed."),
-      );
-    }
-  }
-
-  // --- Resolve: after the conclusion is posted AND the TTL elapsed, or when
-  // the flag is turned off. On TTL-driven resolution the flag is flipped off. --
-  if (flagOff || (incident.summaryPosted && ttlElapsed)) {
-    if (spikeEnabled) {
-      await setFlag(SPIKE_FLAG, false, "auto-expiry");
-      flags = await fetchFlags();
-    }
-    await patchIncident(incident.id, {
-      status: "resolved",
-      resolvedAt: new Date().toISOString(),
-    });
-    await appendIncidentEvent(
-      incident.id,
-      ev("recovered", "Transient degradation cleared. Resolved with no action needed."),
-    );
-    await postSlack(
-      spikeRecoveredBlocks(),
-      slackReplyOptions(incident),
-    );
-  }
-
-  return flags;
-}
-
-// Seconds since the most recent RESOLVED outage incident resolved, or Infinity
-// if none has resolved. Drives the post-recovery cooldown.
 function lastResolvedOutageAgeSeconds(recent: OpsIncident[]): number {
   let newest = 0;
   for (const i of recent) {
@@ -503,8 +381,6 @@ function lastResolvedOutageAgeSeconds(recent: OpsIncident[]): number {
   return newest === 0 ? Number.POSITIVE_INFINITY : (Date.now() - newest) / 1000;
 }
 
-// How many outage incidents were created within the trailing hour. Drives the
-// per-hour safety cap.
 function outageIncidentsInLastHour(recent: OpsIncident[]): number {
   const cutoff = Date.now() - 3600_000;
   return recent.filter(

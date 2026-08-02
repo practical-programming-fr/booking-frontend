@@ -5,10 +5,6 @@
 // without importing the server-only config module).
 export const OUTAGE_FLAG_KEY = "fare_adjustment_v2";
 
-// The benign, self-healing scenario flag key (kept here so callers can read it
-// without importing the server-only config module).
-export const SPIKE_FLAG_KEY = "traffic_spike_sim";
-
 // Per-session ("scoped") outage plumbing. The backend serves 500s only to a
 // request that carries this header with the value of an active demo session, so
 // a presenter can break the site for their own browser without affecting anyone
@@ -32,10 +28,9 @@ export type DemoSession = {
   expiresAt: string | null;
 };
 
-// Incident kinds. "outage" is the real bug that gets a fix PR; "spike" is the
-// benign transient (degraded performance) that an agent investigates and
-// concludes is a non-issue. The backend check constraint allows both values.
-export type IncidentKind = "outage" | "spike";
+// Live incident kind. Outages get a fix PR. Legacy non-outage kinds may still
+// exist in storage; runtime paths ignore them.
+export type IncidentKind = "outage";
 
 export type OpsFlag = {
   key: string;
@@ -65,7 +60,7 @@ export type OpsIncident = {
   id: string;
   status: string;
   // Older rows may predate the column; treat a missing kind as "outage".
-  kind?: IncidentKind;
+  kind?: IncidentKind | string;
   title: string;
   startedAt: string;
   resolvedAt: string | null;
@@ -92,17 +87,12 @@ export type ProbeResult = {
 export type OpsSnapshot = {
   now: string;
   outageEnabled: boolean;
-  // Whether the benign transient (degraded performance) scenario is active.
-  spikeEnabled: boolean;
   flags: OpsFlag[];
   probes: ProbeResult[];
   errors: OpsError[];
   errorRate5xx: number;
-  // The most relevant incident to surface (open outage, else open transient,
-  // else the most recent). Kept for backward compatibility.
+  // Open global outage, else the most recent global incident (so a just-resolved
+  // timeline stays visible).
   incident: OpsIncident | null;
-  // The open transient incident, if one is active, surfaced separately so both
-  // scenarios can be represented at once.
-  spikeIncident: OpsIncident | null;
   agentsAvailable: boolean;
 };
